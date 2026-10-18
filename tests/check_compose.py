@@ -36,7 +36,13 @@ def check(binary=None):
         assert service['user'] == '10000:10000'
         assert service['cap_drop'] == ['ALL']
         ports = {(p['target'], p['protocol'], str(p['published']), p['host_ip']) for p in service['ports']}
-        assert ports == {(25565, 'tcp', '25565', '192.168.1.50'), (19132, 'udp', '19132', '192.168.1.50')}
+        assert ports == {(25565, 'tcp', '25565', '192.168.1.50'), (19132, 'udp', '19132', '192.168.1.50'),
+                         (19132, 'tcp', '19132', '192.168.1.50'), (19133, 'udp', '19133', '192.168.1.50')}
+        # NetherNet anuncia la IP LAN del host, nunca la del bridge de Docker.
+        assert service['environment']['GEYSER_TRANSPORT'] == 'both'
+        assert service['environment']['GEYSER_WEBRTC_PORT'] == '19133'
+        assert service['environment']['GEYSER_ADVERTISE_ADDRESSES'] == '192.168.1.50:19133'
+        assert 25575 not in {p['target'] for p in service['ports']}
         volumes = {v['target']: v for v in service['volumes']}
         assert set(volumes) == {'/data', '/opt/release'}
         assert volumes['/opt/release']['read_only'] is True

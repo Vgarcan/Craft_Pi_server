@@ -62,6 +62,9 @@ def preflight(root, requested='auto'):
     ip = lan_ip(requested)
     LOG.info('Host: %s %s, %s, RAM %.0f MiB, disco libre %.1f GiB, LAN %s',
              release['ID'], release['VERSION_CODENAME'], arch, mem['MemTotal']/1024, free/1024**3, ip)
+    if not memory_limits():
+        LOG.warning('El kernel no habilita el cgroup de memoria: el límite de 3 GiB del contenedor no se aplicará. '
+                    'Consulta la sección de memoria del README.')
     model = Path('/proc/device-tree/model')
     if model.exists():
         LOG.info('Modelo: %s', model.read_text().strip('\0'))
@@ -147,8 +150,17 @@ def setup_docker(release, client):
     run(['docker', 'buildx', 'version'])
 
 
+def memory_limits(controllers=Path('/sys/fs/cgroup/cgroup.controllers')):
+    """Raspberry Pi OS arranca con cgroup_disable=memory: Docker ignora entonces mem_limit."""
+    try:
+        return 'memory' in controllers.read_text().split()
+    except OSError:
+        return False
+
+
 def free_ports(ip):
-    for kind, port in ((socket.SOCK_STREAM, 25565), (socket.SOCK_DGRAM, 19132)):
+    for kind, port in ((socket.SOCK_STREAM, 25565), (socket.SOCK_DGRAM, 19132),
+                       (socket.SOCK_STREAM, 19132), (socket.SOCK_DGRAM, 19133)):
         with socket.socket(socket.AF_INET, kind) as sock:
             try:
                 sock.bind((ip, port))

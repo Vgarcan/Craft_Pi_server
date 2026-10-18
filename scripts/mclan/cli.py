@@ -14,7 +14,7 @@ import zipfile
 import zlib
 
 from . import backups, host, versions
-from .common import Error, LOG, confirm, create_only, read_json, run, write_json
+from .common import Error, LOG, atomic_write, confirm, create_only, read_json, run, write_json
 from .net import Client
 from .runtime import Runtime, initialize_data
 
@@ -149,18 +149,25 @@ def install(runtime, args):
 
 
 def update(runtime, args, client):
-    active = runtime.validate()
+    active = runtime.validate(allow_drift=True)
+    # Un git pull del proyecto puede traer otro código Docker o plantilla Compose
+    # sin cambiar las builds: también exige reconstruir, respaldar y verificar.
+    template_changed = runtime.template_drift()
+    project_changed = template_changed or runtime.runtime_drift(active)
     requested = args.minecraft_version or active['minecraft']
     proposal = versions.resolve(client, requested)
     print(f"Actual: Minecraft {active['minecraft']}; Paper {active['paper']['build']}; "
           f"Geyser {active['geyser']['build']}; Floodgate {active['floodgate']['build']}")
     print(f"Propuesta: Minecraft {proposal['minecraft']}; Paper {proposal['paper']['build']}; "
           f"Geyser {proposal['geyser']['build']}; Floodgate {proposal['floodgate']['build']}")
+    if project_changed:
+        print('Proyecto: archivos Docker/Compose nuevos; se reconstruirá la imagen'
+              + (' y se aplicará la plantilla Compose actual.' if template_changed else '.'))
     if args.plan:
         return
     if (runtime.state / 'operation.json').exists():
         raise Error('Primero resuelve la operación interrumpida mediante restore.')
-    if proposal['id'] == active['id']:
+    if proposal['id'] == active['id'] and not project_changed:
         LOG.info('Ya están instaladas estas builds. No se cambian datos.')
         return
     confirm('ACTUALIZAR', 'La actualización desconectará jugadores y puede convertir el mundo. '
@@ -173,11 +180,15 @@ def update(runtime, args, client):
         backup = backups.snapshot(runtime, 'pre-update')
     except BaseException:
         if was_running:
-            runtime.start(args.timeout)
+            # La instalación previa sigue intacta aunque el proyecto ya sea más nuevo.
+            runtime.start(args.timeout, allow_drift=True)
         raise
     marker = runtime.state / 'operation.json'
     write_json(marker, {"operation": "update", "backup": str(backup), "from": active['id'], "to": staged['id']})
     try:
+        if template_changed:
+            # Sustituye sólo una plantilla gestionada anterior; queda copiada en el backup.
+            atomic_write(runtime.root / 'compose.yaml', (runtime.root / 'docker/compose.template.yaml').read_text())
         runtime.activate(staged)
         runtime.validate()
         if was_running:
@@ -216,10 +227,15 @@ def manage(runtime, args):
         # Debe seguir disponible aunque haya una marca de actualización fallida.
         runtime.stop()
         return
-    active = runtime.validate()
+    # Consultar estado y logs debe seguir siendo posible tras un git pull pendiente de update.
+    active = runtime.validate(allow_drift=command in ('status', 'logs'))
     if command == 'status':
         runtime.compose('ps', '--all')
         print(f"Release: {active['id']}; Minecraft {active['minecraft']}; LAN {active['lan_ip']}")
+        if runtime.template_drift() or runtime.runtime_drift(active):
+            print('ATENCIÓN: el proyecto tiene archivos Docker/Compose nuevos. Aplica sudo ./manage.sh update.')
+        if not host.memory_limits():
+            print('ATENCIÓN: el kernel no aplica límites de memoria a contenedores (cgroup memory desactivado).')
         if (runtime.state / 'operation.json').exists():
             print('ATENCIÓN: hay una operación incompleta. Consultar state/operation.json.')
     elif command == 'logs':

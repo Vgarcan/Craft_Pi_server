@@ -9,7 +9,7 @@ import tempfile
 from datetime import datetime, timezone
 import uuid
 
-from .common import Error, LOG, atomic_write, create_only, read_json, run, sha256, write_json
+from .common import Error, LOG, atomic_write, read_json, run, sha256, write_json
 
 
 def stamp():
@@ -151,11 +151,17 @@ def restore(runtime, path, client, timeout, *, ip_override=None):
         active = read_json(staging / 'state/active.json')
         if active['id'] != manifest['active']:
             raise Error('El identificador activo no coincide con el manifiesto del backup.')
-        if (staging / 'compose.yaml').read_text() != (runtime.root / 'docker/compose.template.yaml').read_text():
-            raise Error('El backup usa otra plantilla. Restaura con la misma versión del proyecto.')
-        if ((runtime.root / 'compose.yaml').exists()
-                and (runtime.root / 'compose.yaml').read_text() != (staging / 'compose.yaml').read_text()):
-            raise Error('compose.yaml actual fue modificado; revisa sus diferencias antes de restaurar.')
+        # Se admiten plantillas gestionadas anteriores: al restaurar se activa la actual,
+        # igual que tras update. Una plantilla editada a mano no se reconoce.
+        try:
+            runtime.template_drift(staging / 'compose.yaml')
+        except Error as exc:
+            raise Error('El backup contiene un compose.yaml no gestionado; revísalo antes de restaurar.') from exc
+        if (runtime.root / 'compose.yaml').exists():
+            try:
+                runtime.template_drift()
+            except Error as exc:
+                raise Error('compose.yaml actual fue modificado; revisa sus diferencias antes de restaurar.') from exc
         if (staging / '.env').read_text() != runtime.env_text(active):
             raise Error('La configuración del backup no coincide con su release.')
         if active['id'] != read_json(staging / 'releases' / active['id'] / 'versions.lock.json')['id']:
@@ -163,10 +169,8 @@ def restore(runtime, path, client, timeout, *, ip_override=None):
         if ip_override is not None:
             from .host import lan_ip
             active['lan_ip'] = lan_ip(ip_override)
-        if set(active.get('runtime_sources', {})) != {'Dockerfile', 'entrypoint.sh', 'probe.py'} or any(
-                sha256(runtime.root / 'docker' / name) != digest
-                for name, digest in active['runtime_sources'].items()):
-            raise Error('El backup requiere los mismos archivos Docker del proyecto original.')
+        # Si los archivos Docker cambiaron desde el backup, stage() construye la imagen actual
+        # sobre la misma release fijada: se restauran datos y builds, no código antiguo.
         for key, filename in [('paper', 'paper.jar'), ('geyser', 'Geyser-Spigot.jar'), ('floodgate', 'floodgate-spigot.jar')]:
             if sha256(staging / 'releases' / active['id'] / filename) != active[key]['sha256']:
                 raise Error('Un JAR del backup no coincide con el lock.')
@@ -213,7 +217,7 @@ def restore(runtime, path, client, timeout, *, ip_override=None):
         if ip_override is not None:
             restored_settings['lan_ip'] = active['lan_ip']
         write_json(runtime.root / 'config/settings.json', restored_settings)
-        create_only(runtime.root / 'compose.yaml', (staging / 'compose.yaml').read_text())
+        atomic_write(runtime.root / 'compose.yaml', (runtime.root / 'docker/compose.template.yaml').read_text())
         runtime.activate(active)
         runtime.validate()
         try:

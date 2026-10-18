@@ -10,6 +10,30 @@ import zipfile
 from .common import Error, LOG, atomic_write, create_only, read_json, run, sha256, write_json
 from .classfile import integer_constant
 
+RUNTIME_FILES = ('Dockerfile', 'entrypoint.sh', 'probe.py')
+# Plantillas Compose publicadas antes de la actual. Sólo un compose.yaml idéntico a
+# una de ellas se considera gestionado y sustituible por manage.sh update.
+PREVIOUS_TEMPLATES = {
+    'f6e743cab95f8778c5e6e6c295b7c0a1d7e167d9f9db311efd9475ff90e02d60': '0.1.0',
+}
+NETHERNET_WEBRTC_PORT = 19133
+# Paper con Moonrise (26.x) ya no escribe el mensaje vanilla de guardado final.
+VANILLA_SAVED = 'All dimensions are saved'
+MOONRISE_SAVED = ('Saving worlds', 'Halted I/O scheduler for world', 'All RegionFile I/O tasks to complete')
+
+
+def shutdown_saved(log):
+    """Evidencia de guardado: mensaje vanilla o la secuencia completa de Moonrise en orden."""
+    if VANILLA_SAVED in log:
+        return True
+    position = 0
+    for marker in MOONRISE_SAVED:
+        position = log.find(marker, position)
+        if position < 0:
+            return False
+        position += len(marker)
+    return True
+
 
 class Runtime:
     def __init__(self, root):
@@ -34,12 +58,29 @@ class Runtime:
                     '-f', self.root / 'compose.yaml', *extra, *arguments], capture=capture,
                    check=check, cwd=self.root, timeout=timeout)
 
-    def validate(self):
+    def runtime_drift(self, active):
+        """True si el código Docker del proyecto ya no es el de la imagen activa."""
+        expected = active.get('runtime_sources', {})
+        return set(expected) != set(RUNTIME_FILES) or any(
+            sha256(self.root / 'docker' / name) != digest for name, digest in expected.items())
+
+    def template_drift(self, path=None):
+        """False si coincide con la plantilla actual; True si es una plantilla gestionada anterior."""
+        path = path or self.root / 'compose.yaml'
+        if path.read_text() == (self.root / 'docker/compose.template.yaml').read_text():
+            return False
+        if sha256(path) in PREVIOUS_TEMPLATES:
+            return True
+        raise Error(f'{path.name} difiere de la plantilla gestionada; no se sobrescribirá. '
+                    'Revisa los cambios y conserva ambos archivos iguales.')
+
+    def validate(self, *, allow_drift=False):
+        """allow_drift sólo lo usa update para detectar y aplicar una nueva versión del proyecto."""
         active = self.active()
-        expected_sources = active.get('runtime_sources', {})
-        if set(expected_sources) != {'Dockerfile', 'entrypoint.sh', 'probe.py'} or any(
-                sha256(self.root / 'docker' / name) != digest for name, digest in expected_sources.items()):
-            raise Error('Los archivos Docker difieren de la imagen activa. Recupera el proyecto de la misma versión.')
+        drift = self.template_drift() or self.runtime_drift(active)
+        if drift and not allow_drift:
+            raise Error('El proyecto se actualizó y los archivos Docker o Compose difieren de la instalación activa. '
+                        'Ejecuta sudo ./manage.sh update para reconstruir y verificar con backup previo.')
         for path in self.data.rglob('*'):
             if path.is_symlink():
                 raise Error('No se admiten enlaces simbólicos dentro de data/.')
@@ -50,9 +91,6 @@ class Runtime:
                            'enforce-secure-profile': 'false'}.items():
             if properties.get(key) != value:
                 raise Error(f'server.properties necesita {key}={value}. Se conserva el archivo para tu revisión.')
-        if (self.root / 'compose.yaml').read_text() != (self.root / 'docker/compose.template.yaml').read_text():
-            raise Error('compose.yaml difiere de la plantilla gestionada; no se sobrescribirá. '
-                        'Revisa los cambios y conserva ambos archivos iguales.')
         if (self.root / '.env').read_text() != self.env_text(active):
             raise Error('.env no coincide con active.json; revisa si una operación se interrumpió.')
         self.compose('config', '--quiet')
@@ -93,12 +131,10 @@ class Runtime:
             lock['java_base'] = digest
         # La imagen se identifica también por el código de arranque/salud y la base Java.
         import hashlib
-        material = lock['java_base'] + ''.join(sha256(self.root / 'docker' / n)
-                                               for n in ('Dockerfile', 'entrypoint.sh', 'probe.py'))
+        material = lock['java_base'] + ''.join(sha256(self.root / 'docker' / n) for n in RUNTIME_FILES)
         image = 'mclan-runtime:' + hashlib.sha256(material.encode()).hexdigest()[:20]
         lock.update(runtime_image=image, lan_ip=ip)
-        lock['runtime_sources'] = {name: sha256(self.root / 'docker' / name)
-                                   for name in ('Dockerfile', 'entrypoint.sh', 'probe.py')}
+        lock['runtime_sources'] = {name: sha256(self.root / 'docker' / name) for name in RUNTIME_FILES}
         if run(['docker', 'image', 'inspect', image], capture=True, check=False).returncode:
             run(['docker', 'build', '--platform', 'linux/arm64', '--build-arg',
                  f"JAVA_BASE={lock['java_base']}", '-t', image, self.root / 'docker'])
@@ -142,16 +178,18 @@ class Runtime:
             raise Error('Backup requiere un cierre limpio, sin OOM ni código de salida distinto de cero.')
         # La JVM puede devolver 143 tras ejecutar correctamente sus shutdown hooks.
         # Se exige además evidencia del guardado en ESTE arranque, nunca logs anteriores.
-        result = run(['docker', 'logs', '--since', info['State']['StartedAt'], info['Id']],
-                     capture=True)
-        if 'All dimensions are saved' not in result.stdout + result.stderr:
+        if not shutdown_saved(self.logs_since_start(info)):
             raise Error('No se ha confirmado el guardado de todas las dimensiones. '
                         'Se conserva data/; no se creará un backup consistente.')
 
-    def start(self, timeout=900, *, pending=False):
+    def logs_since_start(self, info):
+        result = run(['docker', 'logs', '--since', info['State']['StartedAt'], info['Id']], capture=True)
+        return result.stdout + result.stderr
+
+    def start(self, timeout=900, *, pending=False, allow_drift=False):
         if (self.state / 'operation.json').exists() and not pending:
             raise Error('Hay una operación interrumpida. Usa restore con un backup completo; consulta recuperación.')
-        self.validate()
+        self.validate(allow_drift=allow_drift)
         if pending:
             # Durante el primer arranque de una transacción, un reinicio del host
             # no debe reabrir automáticamente un mundo aún no verificado.
@@ -198,10 +236,26 @@ class Runtime:
             raise Error('El puerto Bedrock publicado no responde con el protocolo del contenedor.')
         if not re.search(rf"(?<![0-9.]){re.escape(active['minecraft'])}(?![0-9.])", java['version']['name']):
             raise Error('Java Status no anuncia la versión Minecraft fijada.')
-        LOG.info('Verificación local correcta: Java %s; Bedrock %s.', java['version']['name'], bedrock['version'])
+        self.verify_nethernet(active, info)
+        LOG.info('Verificación local correcta: Java %s; Bedrock %s; signaling NetherNet activo.',
+                 java['version']['name'], bedrock['version'])
         print(f"Java: {active['lan_ip']}:25565 (Minecraft {active['minecraft']})")
         print(f"Bedrock: dirección {active['lan_ip']}, puerto 19132; compatibles: {active['compatibility']['bedrock']}")
+        print(f"NetherNet: signaling TCP 19132 y WebRTC UDP {NETHERNET_WEBRTC_PORT} en {active['lan_ip']} "
+              '(no verificado con un cliente 26.60 hasta que exista).')
         print('Falta la prueba de entrada y juego desde otro dispositivo de tu LAN. No se ha simulado un jugador.')
+
+    def verify_nethernet(self, active, info):
+        """Geyser debe confirmar signaling en este arranque y el TCP publicado debe aceptar conexiones."""
+        log = self.logs_since_start(info)
+        if 'Built-in signaling started on' not in log:
+            raise Error('Geyser no confirma el signaling NetherNet; Bedrock 26.60+ no podría conectar. '
+                        'Revisa manage.sh logs.')
+        import socket
+        try:
+            socket.create_connection((active['lan_ip'], 19132), timeout=4).close()
+        except OSError as exc:
+            raise Error(f"El signaling NetherNet no responde en {active['lan_ip']}:19132/tcp.") from exc
 
     def verify_dump(self, active, protocol):
         # OFFLINE es obligatorio: nunca subimos diagnósticos a dump.geysermc.org.
@@ -270,7 +324,9 @@ def initialize_data(runtime, accepted, config_version=10):
     # YAML mínimo con el esquema moderno. Geyser completa sus valores por defecto.
     create_only(data / 'plugins/Geyser-Spigot/config.yml',
                 '# El instalador sólo crea este archivo si no existe.\n'
-                'bedrock:\n  address: 0.0.0.0\n  port: 19132\n  transport: raknet\n  clone-remote-port: false\n'
+                '# transport/webrtc-port/advertise-addresses los fija compose.yaml con propiedades JVM.\n'
+                'bedrock:\n  address: 0.0.0.0\n  port: 19132\n  transport: both\n'
+                f'  webrtc-port: {NETHERNET_WEBRTC_PORT}\n  clone-remote-port: false\n'
                 'java:\n  auth-type: floodgate\n'
                 'advanced:\n  bedrock:\n    validate-bedrock-login: true\n'
                 'log-player-ip-addresses: false\ndebug-mode: false\n'

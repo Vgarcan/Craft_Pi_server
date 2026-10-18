@@ -20,7 +20,8 @@ from mclan import backups, cli, versions
 from mclan.classfile import integer_constant
 from mclan.common import Error, confirm, create_only, read_json, sha256, write_json
 from mclan.net import Client, valid_url
-from mclan.runtime import Runtime, validate_diagnostic
+from mclan import runtime as runtime_module
+from mclan.runtime import Runtime, shutdown_saved, validate_diagnostic
 
 spec = importlib.util.spec_from_file_location('probe', ROOT / 'docker/probe.py')
 probe = importlib.util.module_from_spec(spec)
@@ -226,6 +227,53 @@ class HostAndLifecycleTests(unittest.TestCase):
             with self.assertRaises(Error): runtime.assert_clean_stop()
         runtime.container.return_value['State']['OOMKilled'] = True
         with self.assertRaises(Error): runtime.assert_clean_stop()
+
+    def test_moonrise_shutdown_sequence_counts_as_saved(self):
+        # Secuencia observada en Paper 26.3 build 205 en la Raspberry Pi (18-10-2026).
+        log = ('[16:39:41 INFO]: Stopping server\n[16:39:41 INFO]: Saving worlds\n'
+               "[16:39:41 INFO]: [ChunkHolderManager] Halted I/O scheduler for world 'minecraft:overworld'\n"
+               '[16:39:41 INFO]: All RegionFile I/O tasks to complete\n')
+        self.assertTrue(shutdown_saved(log))
+        self.assertTrue(shutdown_saved('All dimensions are saved'))
+        self.assertFalse(shutdown_saved('[16:39:41 INFO]: Saving worlds\n'))
+        # Orden invertido: el cierre de I/O no puede preceder al guardado.
+        self.assertFalse(shutdown_saved('All RegionFile I/O tasks to complete\nSaving worlds\n'
+                                        'Halted I/O scheduler for world'))
+        runtime = Runtime(ROOT)
+        runtime.container = Mock(return_value={'Id': 'abc', 'State': {
+            'Running': False, 'OOMKilled': False, 'ExitCode': 143, 'StartedAt': '2026-10-18T16:00:00Z'}})
+        with patch('mclan.runtime.run', return_value=Mock(stdout=log, stderr='')):
+            runtime.assert_clean_stop()
+
+    def test_memory_cgroup_detection(self):
+        from mclan import host
+        with tempfile.TemporaryDirectory() as directory:
+            controllers = Path(directory) / 'cgroup.controllers'
+            controllers.write_text('cpuset cpu io pids\n')
+            self.assertFalse(host.memory_limits(controllers))
+            controllers.write_text('cpuset cpu io memory pids\n')
+            self.assertTrue(host.memory_limits(controllers))
+            self.assertFalse(host.memory_limits(Path(directory) / 'missing'))
+
+    def test_nethernet_verification_requires_signaling_log_and_tcp(self):
+        runtime = Runtime(ROOT)
+        info = {'Id': 'abc', 'State': {'StartedAt': '2026-10-18T16:00:00Z'}}
+        server = socket.socket()
+        server.bind(('127.0.0.1', 0))
+        server.listen()
+        port = server.getsockname()[1]
+        real_connect = socket.create_connection
+        try:
+            with patch('mclan.runtime.run', return_value=Mock(stdout='[Geyser-Spigot] Built-in signaling started on 0.0.0.0:19132', stderr='')), \
+                 patch('socket.create_connection', side_effect=lambda address, timeout: real_connect(('127.0.0.1', port), timeout)):
+                runtime.verify_nethernet({'lan_ip': '127.0.0.1'}, info)
+            with patch('mclan.runtime.run', return_value=Mock(stdout='NetherNet support is NOT enabled', stderr='')):
+                with self.assertRaises(Error): runtime.verify_nethernet({'lan_ip': '127.0.0.1'}, info)
+        finally:
+            server.close()
+        with patch('mclan.runtime.run', return_value=Mock(stdout='Built-in signaling started on', stderr='')), \
+             patch('socket.create_connection', side_effect=OSError('refused')):
+            with self.assertRaises(Error): runtime.verify_nethernet({'lan_ip': '127.0.0.1'}, info)
 
     def test_pending_start_keeps_marker_and_disables_auto_restart(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -445,8 +493,72 @@ class BackupTests(unittest.TestCase):
         with patch('mclan.cli.versions.resolve', return_value=proposal), patch('mclan.cli.confirm'), \
              patch('mclan.cli.backups.snapshot', side_effect=Error('disk full')):
             with self.assertRaises(Error): cli.update(self.runtime, args, Mock())
-        self.runtime.start.assert_called_once_with(10)
+        self.runtime.start.assert_called_once_with(10, allow_drift=True)
         self.assertEqual(self.runtime.active()['id'], self.active['id'])
+
+    def old_template(self):
+        """Simula una plantilla gestionada anterior conocida por el proyecto."""
+        old = (ROOT / 'docker/compose.template.yaml').read_text() + '# plantilla anterior\n'
+        (self.root / 'compose.yaml').write_text(old)
+        return patch.dict(runtime_module.PREVIOUS_TEMPLATES, {sha256(self.root / 'compose.yaml'): 'test'})
+
+    def test_strict_validation_rejects_project_drift_but_update_detects_it(self):
+        real = Runtime(self.root)
+        with self.old_template():
+            with self.assertRaises(Error): real.validate()
+            self.assertTrue(real.template_drift())
+        (self.root / 'compose.yaml').write_text('edited by hand\n')
+        with self.assertRaises(Error): real.template_drift()
+        (self.root / 'compose.yaml').write_bytes((ROOT / 'docker/compose.template.yaml').read_bytes())
+        self.assertFalse(real.template_drift())
+        drifted = dict(self.active, runtime_sources={'Dockerfile': '0'*64, 'entrypoint.sh': '0'*64, 'probe.py': '0'*64})
+        self.assertTrue(real.runtime_drift(drifted))
+        self.assertFalse(real.runtime_drift(self.active))
+
+    def test_project_update_with_same_builds_rebuilds_backs_up_and_applies_template(self):
+        args = argparse.Namespace(minecraft_version=None, plan=False, timeout=10)
+        self.runtime.running.return_value = True
+        with self.old_template(), patch('mclan.cli.versions.resolve', return_value=copy.deepcopy(self.active)), \
+             patch('mclan.cli.confirm'):
+            cli.update(self.runtime, args, Mock())
+        self.runtime.stage.assert_called_once()
+        self.assertEqual(len(list((self.root / 'backups').glob('*-pre-update.tar.gz'))), 1)
+        self.assertEqual((self.root / 'compose.yaml').read_text(), (ROOT / 'docker/compose.template.yaml').read_text())
+        self.runtime.start.assert_called_once_with(10, pending=True)
+        self.assertFalse((self.runtime.state / 'operation.json').exists())
+
+    def test_update_plan_reports_project_drift_without_changes(self):
+        args = argparse.Namespace(minecraft_version=None, plan=True, timeout=10)
+        with self.old_template(), patch('mclan.cli.versions.resolve', return_value=copy.deepcopy(self.active)):
+            before = (self.root / 'compose.yaml').read_text()
+            cli.update(self.runtime, args, Mock())
+            self.assertEqual((self.root / 'compose.yaml').read_text(), before)
+        self.runtime.stage.assert_not_called()
+        self.runtime.stop.assert_not_called()
+
+    def test_no_drift_and_same_builds_changes_nothing(self):
+        args = argparse.Namespace(minecraft_version=None, plan=False, timeout=10)
+        with patch('mclan.cli.versions.resolve', return_value=copy.deepcopy(self.active)), patch('mclan.cli.confirm') as asked:
+            cli.update(self.runtime, args, Mock())
+        asked.assert_not_called()
+        self.runtime.stage.assert_not_called()
+
+    def test_restore_backup_from_previous_template_activates_current_template(self):
+        with self.old_template():
+            path = backups.snapshot(self.runtime)
+            (self.runtime.data / 'level.dat').write_bytes(b'changed-world')
+            with patch('mclan.backups.os.chown'):
+                backups.restore(self.runtime, path, Mock(), 10)
+        self.assertEqual((self.runtime.data / 'level.dat').read_bytes(), b'original-world')
+        self.assertEqual((self.root / 'compose.yaml').read_text(), (ROOT / 'docker/compose.template.yaml').read_text())
+
+    def test_restore_rejects_backup_with_hand_edited_compose(self):
+        (self.root / 'compose.yaml').write_text('edited by hand\n')
+        path = backups.snapshot(self.runtime)
+        (self.root / 'compose.yaml').write_bytes((ROOT / 'docker/compose.template.yaml').read_bytes())
+        (self.runtime.data / 'level.dat').write_bytes(b'changed-world')
+        with self.assertRaises(Error): backups.restore(self.runtime, path, Mock(), 10)
+        self.assertEqual((self.runtime.data / 'level.dat').read_bytes(), b'changed-world')
 
     def test_install_repeat_does_not_resolve_or_overwrite_world(self):
         args = argparse.Namespace(contact=None, lan_ip=None, minecraft_version=None,

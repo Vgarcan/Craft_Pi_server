@@ -14,9 +14,25 @@ if [ -L /data/plugins ] || [ -L /data/plugins/Geyser-Spigot.jar ] \
     echo 'No se admiten enlaces en las rutas de los plugins gestionados.' >&2
     exit 1
 fi
-cp /opt/release/Geyser-Spigot.jar /data/plugins/Geyser-Spigot.jar
-cp /opt/release/floodgate-spigot.jar /data/plugins/floodgate-spigot.jar
+# La copia hereda el modo 0444 del release y queda en 0400: cp no podría
+# sobrescribirla en el siguiente arranque. Se copia aparte y se renombra.
+for jar in Geyser-Spigot.jar floodgate-spigot.jar; do
+    cp /opt/release/"$jar" /data/plugins/."$jar".mclan-new
+    mv -f /data/plugins/."$jar".mclan-new /data/plugins/"$jar"
+done
+# NetherNet (Bedrock 26.60+) anuncia direcciones WebRTC: la IP interna del
+# contenedor no es alcanzable desde la LAN, así que se anuncia la del host.
+# Estas propiedades prevalecen sobre plugins/Geyser-Spigot/config.yml.
+set --
+if [ "${GEYSER_TRANSPORT:-raknet}" != raknet ]; then
+    case "${GEYSER_WEBRTC_PORT:-}" in
+        ''|*[!0-9]*) echo 'GEYSER_WEBRTC_PORT inválido.' >&2; exit 1 ;;
+    esac
+    [ -n "${GEYSER_ADVERTISE_ADDRESSES:-}" ] || { echo 'Falta GEYSER_ADVERTISE_ADDRESSES.' >&2; exit 1; }
+    set -- "-DgeyserTransport=$GEYSER_TRANSPORT" "-DgeyserWebrtcPort=$GEYSER_WEBRTC_PORT" \
+        "-DgeyserAdvertiseAddresses=$GEYSER_ADVERTISE_ADDRESSES"
+fi
 exec java "-Xms${JAVA_XMS:-512M}" "-Xmx${JAVA_XMX:-2048M}" \
     -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError \
     -Dfile.encoding=UTF-8 -Dterminal.jline=false -Dterminal.ansi=false \
-    -jar /opt/release/paper.jar --nogui
+    "$@" -jar /opt/release/paper.jar --nogui

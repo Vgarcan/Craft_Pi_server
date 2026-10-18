@@ -14,9 +14,16 @@ services:
     environment:
       JAVA_XMS: 512M
       JAVA_XMX: 2048M
+      # RakNet para clientes actuales y NetherNet para Bedrock 26.60+.
+      GEYSER_TRANSPORT: both
+      GEYSER_WEBRTC_PORT: "19133"
+      GEYSER_ADVERTISE_ADDRESSES: "${LAN_IP:?Falta LAN_IP}:19133"
     ports:
       - "${LAN_IP:?Falta LAN_IP}:25565:25565/tcp"
       - "${LAN_IP:?Falta LAN_IP}:19132:19132/udp"
+      # Signaling NetherNet integrado (TCP) y tráfico WebRTC (UDP).
+      - "${LAN_IP:?Falta LAN_IP}:19132:19132/tcp"
+      - "${LAN_IP:?Falta LAN_IP}:19133:19133/udp"
     volumes:
       - type: bind
         source: ./data
