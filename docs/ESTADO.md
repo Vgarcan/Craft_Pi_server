@@ -244,4 +244,20 @@ Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa
 - Hasta 50 mundos y uno activo en los puertos de siempre, como decidió el operador.
 - **Núcleo:** `scripts/mclan/worlds.py` y `manage.sh world …`. **Panel:** World → World library.
 - **Pruebas automatizadas:** cambio de mundo con intercambio real de mundo, mapa y ajustes; mundo nuevo con semilla; marcha atrás si no arranca; importación con rechazos de seguridad; exportación verificada; borrado con archivo previo; restore de un backup de otro mundo sin perder el activo; rutas y descargas del panel. 124 pruebas en total.
-- **Pendiente en la Pi:** desplegar (requiere `sudo`). Después, primer cambio real de mundo, importar y exportar un mundo y medir los tiempos.
+
+### Verificado en hardware (18-10-2026, 0.6.0)
+
+| Prueba | Resultado |
+| --- | --- |
+| Despliegue de 0.5.0 y 0.6.0 | Sin deriva de runtime (no hace falta `update`). Panel reinstalado con 2182 texturas; `imports/` del administrador; `exports/` legible por el grupo del panel |
+| Auditoría funcional del panel | **21/21** con un panel temporal en 127.0.0.1:8444, como `mclan-panel`, con helper y sudo reales: login; las 7 páginas (0–1,5 s; Health 3,4 s porque ejecuta la auditoría); perfil de jugador; pulse; logs sin ruido; `list` por la consola; `stop` bloqueado; 403 sin CSRF y con Origin ajeno. Panel temporal retirado |
+| Crear mundo con semilla | `audit-test`, semilla 424242 |
+| Activar un mundo nuevo | **104 s**: backup `pre-switch-main` verificado, intercambio, generación y verificación de Java, Bedrock y NetherNet. `seed` = 424242; BlueMap renderizando el mundo nuevo |
+| Volver al mundo principal | **77 s**. Xemitest intacto: 185 regiones, mapa conservado (12 597 archivos frente a 12 595), semilla y borde de 3200 recuperados, y su dificultad propia |
+| Borrar un mundo | Archivado como zip con `.sha256` en `backups/worlds/` antes de borrar (1 s) |
+| `tools/audit.sh --verify` | Sin fallos. Avisos: 755 MiB de swap en uso (sesión de VS Code y render de BlueMap) y backups en la misma microSD |
+
+### Pendiente
+
+- Importar desde `imports/` un mundo Java y otro Bedrock, y exportar a `.mcworld`, con archivos reales del usuario.
+- Rotación de backups: cada cambio de mundo añade un backup `pre-switch` de unos 330 MB.
