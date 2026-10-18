@@ -582,7 +582,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         defaults = {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
                     'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
                                                "frame-ancestors 'none'; base-uri 'none'",
-                    'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY'}
+                    'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
+                    # no-referrer hace que el navegador envíe "Origin: null" en los POST del propio
+                    # panel y la comprobación de Origin los rechazaría. same-origin no filtra nada fuera.
+                    'Referrer-Policy': 'same-origin'}
         for key, value in {**defaults, **headers}.items():
             self.send_header(key, value)
         self.send_header('Content-Length', str(len(payload)))

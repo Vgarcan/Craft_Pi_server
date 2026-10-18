@@ -369,6 +369,9 @@ class PanelAppTests(unittest.TestCase):
 
     def test_login_requires_same_origin_and_concurrent_attempts_respect_limit(self):
         self.assertEqual(self.request('POST', '/login', 'password=x', origin='https://evil.example')[0], 403)
+        # Lo que envía un navegador real desde el formulario del propio panel.
+        self.assertEqual(self.request('POST', '/login', 'password=contrase%C3%B1a-larga',
+                                      origin='https://192.168.1.50:8443')[0], 303)
         results = []
         def attempt():
             results.append(self.request('POST', '/login', 'password=mal', ip='192.168.1.77')[0])
@@ -478,6 +481,8 @@ class PanelAppTests(unittest.TestCase):
                 self.assertIn("default-src 'none'", response.headers['Content-Security-Policy'])
                 self.assertEqual(response.headers['X-Frame-Options'], 'DENY')
                 self.assertEqual(response.headers['Cache-Control'], 'no-store')
+                # Con no-referrer los navegadores mandan Origin: null en formularios y el login fallaría.
+                self.assertEqual(response.headers['Referrer-Policy'], 'same-origin')
             with self.assertRaises(HTTPError) as caught:
                 urlopen(Request(f'{base}/login', data=b'x' * (server.MAX_BODY + 1)))
             self.assertEqual(caught.exception.code, 413)
