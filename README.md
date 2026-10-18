@@ -494,3 +494,14 @@ Abre `https://IP_DE_LA_PI:8443/` desde la LAN. Si escribes la dirección sin `ht
 
 - Indicar su XUID: el panel lo convierte al UUID de Floodgate.
 - Usar la **apertura temporal**: la whitelist se desactiva hasta que entra ese jugador (máximo 15 minutos), se le añade y se reactiva siempre, también si falla algo. Mientras está abierta puede entrar cualquier cuenta válida de la LAN.
+
+### Importar un mundo Bedrock (.mcworld)
+
+No hay un comando automático: es una migración que conviene revisar cada vez. El procedimiento ensayado (detalle en [ESTADO.md](docs/ESTADO.md)) es:
+
+1. Extraer el `.mcworld` (un zip) en una carpeta nueva y revisar que no traiga behavior ni resource packs.
+2. Convertir con el CLI de [Chunker](https://github.com/HiveGamesOSS/Chunker), comprobando su SHA-256, a `JAVA_<versión del servidor>`. Hazlo en un contenedor sin red con la imagen Java de la release: `docker run --rm --network none --user 1000:1000 -v …:/in -v …:/out <java_base> java -jar chunker-cli.jar -i /in -o /out/mundo -f JAVA_26_3`. LevelDB necesita escribir en la carpeta de entrada: usa una copia.
+3. Revisar los avisos `Missing entity mapping`: esas entidades se pierden.
+4. Probar el mundo en un Paper aislado (sin red ni puertos) antes de tocar producción.
+5. `stop`, `backup`, apartar `data/world`, copiar el mundo convertido con propietario `10000:10000` y `start`.
+6. Fijar el spawn si Bedrock usaba «buscar superficie» (`setworldspawn X Y Z`), y regenerar el mapa: borra `data/bluemap/web/maps` con el servidor parado y lanza `bluemap force-update MAPA`.

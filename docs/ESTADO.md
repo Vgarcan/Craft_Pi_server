@@ -193,3 +193,22 @@ Además, en hardware:
 - Propuestas operativas: rotación y exportación de backups a USB, backup programado con aviso a jugadores, `restore --dry-run`, menos ruido del healthcheck RCON en el log.
 - La imagen instala `python3` por APT sin fijar versión (no es reproducible bit a bit).
 - La contraseña inicial del panel apareció en una captura compartida: **cámbiala**.
+
+## Migración de un mundo Bedrock (18-10-2026)
+
+Migración tratada aparte, sobre copias, como se pidió al inicio del proyecto.
+
+| Paso | Resultado |
+| --- | --- |
+| Origen | `.mcworld` de Bedrock 1.26.50 (15 MB, sin behavior ni resource packs) |
+| Conversión | Chunker 1.21.0 CLI (`chunker-cli-1.21.0.jar`, SHA-256 verificado contra GitHub). Formato `JAVA_26_3`, ejecutado en un contenedor Temurin **sin red, sin capacidades y como usuario sin privilegios**. Extracción del zip con rechazo de rutas, enlaces y tamaños anómalos. 15 s |
+| Pérdidas declaradas por Chunker | Entidades sin correspondencia en Java 26.3: animales y monstruos (gallina, llama, peces, zombi, creeper, esqueleto, guardián, delfín…), objetos en el suelo, orbes de experiencia, barcas, flechas, tridentes y **vagonetas con cofre (con su contenido)**. Bloques y cofres normales se conservan |
+| Prueba aislada | Paper 26.3 de prueba sin red ni puertos: migración de carpetas de Paper, `Done` en 60 s, sin errores de chunks; `forceload` de 256 chunks sin errores; parada limpia |
+| Sustitución | Parada, backup gestionado verificado y mundo anterior apartado en `/var/backups/craft-pi/world-pre-xemitest-*`. Mundo convertido con UID 10000 y permisos 700/600 |
+| Spawn | Bedrock usa `SpawnY 32767` («buscar superficie») y Chunker lo dejó en y = −1. Se fijó con `setworldspawn 11 68 0`, la posición del jugador original |
+| Verificación | `start` correcto (Java, Bedrock, NetherNet, BlueMap) |
+| Mapa | Teselas antiguas borradas y render forzado: 1414 teselas de detalle en el mundo normal, unos 10 minutos con un hilo, pico de 59 °C, sin throttling, 94 MB |
+
+**Pendiente:** el inventario del jugador Bedrock (6 objetos y su posición) quedó con UUID `00000000-0000-0000-0000-000000000000`. Se asignará a su UUID de Floodgate cuando entre por primera vez, con el servidor parado.
+
+Lección para BlueMap: tras cambiar el mundo hay que borrar `data/bluemap/web/maps` y forzar `bluemap force-update` en cada mapa; si no, BlueMap considera los mapas al día.
