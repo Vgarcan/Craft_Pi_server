@@ -100,6 +100,21 @@ class HelperValidationTests(unittest.TestCase):
                          [('bedrock', 'Xeministrator', '16:49:36'), ('java', 'Steve', '17:00:00'), ('java', 'Alex', '17:01:00')])
         self.assertEqual([r['name'] for r in helper.rejected_attempts(log, {'.xeministrator', 'steve'})], ['Alex'])
 
+    def test_rejections_survive_container_recreation_via_paper_logs(self):
+        import gzip
+        with tempfile.TemporaryDirectory() as directory:
+            logs = Path(directory) / 'data/logs'
+            logs.mkdir(parents=True)
+            line = ('[16:29:04] [localSession-7-2/INFO]: [Geyser-Spigot] Xeministrator has disconnected from the Java '
+                    'server because of §rYou are not whitelisted on this server!\n')
+            with gzip.open(logs / '2026-10-18-1.log.gz', 'wt') as stream:
+                stream.write(line)
+            (logs / 'latest.log').write_text('[18:00:00] [Server thread/INFO]: Done (25.8s)!\n')
+            panel = helper.Panel.__new__(helper.Panel)
+            panel.runtime = Mock(data=Path(directory) / 'data')
+            found = helper.rejected_attempts(panel.paper_logs(), set())
+            self.assertEqual([(r['name'], r['last_seen']) for r in found], [('Xeministrator', '16:29:04')])
+
     def test_set_properties_stops_edits_and_restarts_only_if_running(self):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory) / 'data'

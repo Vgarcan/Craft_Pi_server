@@ -6,6 +6,7 @@ VERBS con argumentos validados por patrones cerrados: nunca texto libre hacia la
 Las escrituras comparten el bloqueo de manage.sh y quedan registradas en logs/operations.log.
 Imprime un objeto JSON {"ok": bool, ...} en stdout.
 """
+import gzip
 import json
 import os
 from pathlib import Path
@@ -188,6 +189,21 @@ class Panel:
         result = run(args, capture=True, check=False)
         return result.stdout + result.stderr
 
+    def paper_logs(self, archives=2):
+        """Logs de Paper en data/logs: sobreviven a recrear el contenedor, a diferencia de docker logs."""
+        folder = self.runtime.data / 'logs'
+        older = sorted(folder.glob('*.log.gz'), key=lambda p: p.stat().st_mtime)[-archives:]
+        parts = []
+        for path in older:
+            try:
+                with gzip.open(path, 'rt', errors='replace') as stream:
+                    parts.append(stream.read(8 * 1024**2))
+            except (OSError, EOFError):
+                continue
+        if (folder / 'latest.log').exists():
+            parts.append((folder / 'latest.log').read_text(errors='replace')[-8 * 1024**2:])
+        return '\n'.join(parts)
+
     def whitelist(self):
         path = self.runtime.data / 'whitelist.json'
         return read_json(path) if path.exists() else []
@@ -205,7 +221,6 @@ class Panel:
             except Error:
                 players = None
         whitelist = self.whitelist()
-        log = self.server_log(tail=4000) if info else ''
         backups = sorted((self.root / 'backups').glob('*.tar.gz'), key=lambda p: p.stat().st_mtime, reverse=True)
         return {
             'release': {key: active[key] for key in ('id', 'minecraft', 'lan_ip') if key in active}
@@ -227,7 +242,7 @@ class Panel:
             'whitelist': [{'name': e.get('name'), 'uuid': e.get('uuid'),
                            'edition': 'bedrock' if str(e.get('uuid', '')).startswith('00000000-0000-0000-') else 'java'}
                           for e in whitelist],
-            'rejected': rejected_attempts(log, {str(e.get('name', '')).lower() for e in whitelist}),
+            'rejected': rejected_attempts(self.paper_logs(), {str(e.get('name', '')).lower() for e in whitelist}),
             'backups': [{'name': p.name, 'size': p.stat().st_size, 'mtime': p.stat().st_mtime} for p in backups[:10]],
         }
 
