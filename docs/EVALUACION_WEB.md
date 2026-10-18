@@ -1,6 +1,10 @@
 # Evaluación: administración web, mapa web y QuestCraft
 
-Revisión documental del 18-10-2026, previa a cualquier integración. **No se ha instalado nada de lo que se describe aquí.** Las afirmaciones proceden de las fuentes enlazadas. Lo marcado como *sin verificar* debe comprobarse en la Pi antes de decidir.
+Revisión documental del 18-10-2026, previa a cualquier integración.
+
+> **Decisión tomada (0.3.0):** panel propio sobre `manage.sh` (opción B) y BlueMap como plugin gestionado. Crafty no se ha instalado. Estado y verificación en [ESTADO.md](ESTADO.md).
+
+Las secciones siguientes son la evaluación original. Las afirmaciones proceden de las fuentes enlazadas. Lo marcado como *sin verificar* debe comprobarse en la Pi antes de decidir.
 
 ## 1. Restricción de diseño
 

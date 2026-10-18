@@ -86,6 +86,20 @@ else
     warn 'La release activa no incluye BlueMap'
 fi
 
+section 'Panel web'
+panel_port_ok() {
+    grep -Eq "^tcp .* $LAN_IP:8443 " <<<"$listening" && ! grep -Eq '^tcp .* (0\.0\.0\.0|\*|\[::\]):8443 ' <<<"$listening"
+}
+if [[ -f /etc/systemd/system/mclan-panel.service ]]; then
+    expect fail 'Servicio mclan-panel activo' 'Servicio mclan-panel inactivo (journalctl -u mclan-panel)' systemctl is-active --quiet mclan-panel
+    expect fail "Panel sólo en https://$LAN_IP:8443/" 'El panel no escucha sólo en la IP LAN' panel_port_ok
+    expect fail 'Regla sudo del panel limitada al helper' 'La regla sudo del panel no es la gestionada' \
+        grep -qx "mclan-panel ALL=(root) NOPASSWD: /usr/bin/python3 -I $PROJECT_DIR/panel/helper.py \\*" /etc/sudoers.d/mclan-panel
+    if [[ -f /etc/mclan-panel/initial-password ]]; then warn 'El panel conserva la contraseña inicial: cámbiala en Cuenta'; fi
+else
+    warn 'Panel web no instalado (sudo panel/install.sh)'
+fi
+
 section 'Estado gestionado'
 expect fail 'Sin operaciones pendientes' 'Operación incompleta: state/operation.json' test ! -e state/operation.json
 attention="$(./manage.sh status 2>/dev/null | grep 'ATENCIÓN' || true)"

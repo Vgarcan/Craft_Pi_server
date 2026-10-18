@@ -14,8 +14,8 @@ Lo que necesita un jugador real, un dispositivo concreto o una fecha futura qued
 | 1 | Estabilizar la instalación actual | **Completada en hardware**, salvo dos cambios del host que dependen del operador |
 | 2 | Validar el juego real con Java, Bedrock y QuestCraft | **Pendiente**: necesita clientes reales |
 | 3 | Validar la administración | **Parcial**: ciclo de vida, backup, update y ensayo de restore verificados; faltan reinicio de la Pi y carga con jugadores |
-| 4 | Administración web | **Evaluación**; no integrado. Ver [EVALUACION_WEB.md](EVALUACION_WEB.md) |
-| 5 | Mapa web | **Evaluación**; no integrado. Ver [EVALUACION_WEB.md](EVALUACION_WEB.md) |
+| 4 | Administración web | **Panel propio implementado y verificado en hardware** (0.3.0); falta usarlo con jugadores reales |
+| 5 | Mapa web | **BlueMap 5.29 integrado y verificado en hardware** (0.3.0); falta medir el render con un mundo explorado |
 
 ## Equipo de referencia
 
@@ -129,6 +129,24 @@ Observación del ensayo de restore: sin red, Paper arranca, pero Geyser no obtie
 
 Cada snapshot ocupa unos 330 MB: incluye los JAR del release y las librerías de Paper. No hay rotación automática.
 
-## Fases 4 y 5
+## Fases 4 y 5 — Panel web y mapa (0.3.0)
 
-Ver [EVALUACION_WEB.md](EVALUACION_WEB.md). No se ha instalado ningún panel ni mapa.
+Decisión: en lugar de Crafty, que exigiría cederle el proceso de Paper (ver [EVALUACION_WEB.md](EVALUACION_WEB.md)), un **panel propio** sobre `manage.sh` y **BlueMap** como plugin. Uso: README, sección 15.
+
+### Verificado en hardware (18-10-2026)
+
+| Prueba | Resultado |
+| --- | --- |
+| `update` de 0.2.0 a release con BlueMap 5.29 | Correcto: backup `pre-update` verificado, imagen y plantilla nuevas, `verify` con BlueMap habilitado y web en 8100 |
+| BlueMap en la Pi | Descarga del cliente 26.3 desde `piston-data.mojang.com`, tres mapas cargados, render inicial terminado en menos de 1 minuto (mundo recién creado). Contenedor 1,34 GiB de 3 GiB, 50–52 °C |
+| Instalación del panel | Servicio `mclan-panel` activo con 14,5 MB de RAM, solo en `192.168.2.120:8443` |
+| Alcance de sudo | `mclan-panel` ejecuta `python3 -I panel/helper.py`. Se rechazan `/bin/true` y el helper sin `-I`. El helper rechaza un nombre con `;` |
+| HTTPS de punta a punta | Login fallido rechazado; login correcto. Estado, Whitelist, Ajustes, Logs y Auditoría responden entre 0,1 y 3,4 s. Un POST sin CSRF recibe 403 |
+| Intentos rechazados | El jugador Bedrock rechazado esta tarde aparece con su botón «Permitir», leído de los logs rotados de Paper |
+
+### Pendiente
+
+- Cambiar la contraseña inicial del panel (Cuenta) y borrar así `/etc/mclan-panel/initial-password`.
+- Añadir a los jugadores desde la página Whitelist. Para el jugador Bedrock sin XUID en caché: XUID o apertura temporal.
+- Probar «Aplicar ajustes», «Backup» y la apertura temporal desde la web con jugadores reales. Están probadas con dobles, no en hardware.
+- Medir BlueMap con un mundo explorado (CPU, temperatura, disco de `data/bluemap`).

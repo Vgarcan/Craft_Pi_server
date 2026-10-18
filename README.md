@@ -18,6 +18,7 @@ Instalador y administrador de **Paper + GeyserMC + Floodgate**, dentro de Docker
 12. [Diagnóstico](#12-diagnóstico)
 13. [Pruebas y desarrollo](#13-pruebas-y-desarrollo)
 14. [Fuentes y decisiones](#14-fuentes-y-decisiones)
+15. [Panel web y mapa](#15-panel-web-y-mapa)
 
 ## 1. Alcance y estado de verificación
 
@@ -146,7 +147,7 @@ Un único contenedor ejecuta **Paper**. **Geyser-Spigot** y **Floodgate-Spigot**
 | Logs de operaciones | `logs/operations.log`, con rotación |
 | Logs del servidor | Docker con rotación y registros propios de Paper en `data/logs/` |
 
-Sólo se publican los puertos del juego: TCP 25565, UDP 19132, TCP 19132 y UDP 19133. **RCON 25575 no se publica en el host.** No se monta el socket Docker en el contenedor.
+El contenedor sólo publica, en la IP LAN, los puertos del juego (TCP 25565, UDP 19132, TCP 19132 y UDP 19133) y la web del mapa (TCP 8100). El panel web es un servicio aparte del host en TCP 8443. **RCON 25575 no se publica en el host.** No se monta el socket Docker en el contenedor.
 
 ```text
 minecraft-lan-installer/
@@ -341,7 +342,7 @@ Los dos JARs con nombres `Geyser-Spigot.jar` y `floodgate-spigot.jar` están res
 
 ## 11. Red y arranque automático
 
-Se publican TCP 25565, UDP 19132, TCP 19132 y UDP 19133 **en la IPv4 LAN seleccionada**. No se usa `0.0.0.0` en el host ni se publica IPv6. Dentro del contenedor, Geyser escucha en `0.0.0.0`, que pertenece a su red aislada.
+Se publican TCP 25565, UDP 19132, TCP 19132, UDP 19133 y TCP 8100 (mapa) **en la IPv4 LAN seleccionada**; el panel escucha en TCP 8443 de esa misma IP. No se usa `0.0.0.0` en el host ni se publica IPv6. Dentro del contenedor, Geyser escucha en `0.0.0.0`, que pertenece a su red aislada.
 
 El instalador no entra al router, no crea port forwarding, no usa UPnP y no modifica las reglas del firewall del host. **Docker sí gestiona sus reglas de red** para publicar puertos; esto puede interactuar con UFW/firewalld. Una publicación en una IP local no equivale por sí misma a una ACL por subred: equipos de redes enrutadas que ya puedan alcanzar esa IP podrían acceder. Consulta la documentación Docker de firewall si tu red requiere restricciones adicionales.
 
@@ -429,3 +430,52 @@ Fuentes revisadas el **18 de octubre de 2026**. El instalador vuelve a consultar
 - [Raspberry Pi Imager](https://www.raspberrypi.com/software/) y [EULA Minecraft](https://www.minecraft.net/eula).
 
 No se redistribuyen JARs, claves, mundos ni imágenes Docker en este paquete. Se descargan desde sus proveedores al instalar. Cada componente conserva sus propias condiciones y licencia. El fijado por digest de Temurin no convierte la reconstrucción en bit a bit reproducible: la capa APT que añade Python obtiene paquetes del repositorio durante la construcción. Se reutiliza la imagen ya construida cuando está disponible.
+
+## 15. Panel web y mapa
+
+### Mapa: BlueMap
+
+Desde la 0.3.0, cada release incluye **BlueMap**, un plugin de Paper dentro del mismo proceso. No es un segundo servidor. Se resuelve en Hangar como la última versión *Release* que declara la versión de Minecraft fijada, y se fija con el SHA-256 publicado, igual que Geyser y Floodgate.
+
+- Mapa 3D y jugadores en vivo en `http://IP_DE_LA_PI:8100/`, sólo en la LAN.
+- `plugins/BlueMap/core.conf` se crea una sola vez con un perfil para la Pi: un hilo de render y métricas desactivadas. Después puedes editarlo; no se sobrescribe.
+- `accept-download: true` acepta la EULA de Minecraft para descargar las texturas del cliente desde Mojang. Sólo se escribe si `eula.txt` ya registra tu aceptación.
+- Los backups no incluyen `data/bluemap/web/maps`: las teselas se regeneran tras un restore.
+- `verify` comprueba que BlueMap está habilitado en Paper y que su web responde.
+
+Para limitar más el render (por ejemplo `min-inhabited-time` o `render-mask` con radio), edita `plugins/BlueMap/maps/*.conf` con el servidor parado. Consulta la [documentación de BlueMap](https://bluemap.bluecolored.de/wiki/configs/Maps.html).
+
+### Panel web
+
+```bash
+sudo panel/install.sh                  # instalar o actualizar (repetir tras rebind)
+sudo cat /etc/mclan-panel/initial-password
+sudo panel/install.sh --reset-password # nueva contraseña desde la terminal
+sudo panel/install.sh --uninstall
+```
+
+Abre `https://IP_DE_LA_PI:8443/` desde la LAN. El certificado es autofirmado: el navegador avisará la primera vez. Compara su huella SHA-256 con la que imprime `install.sh` antes de aceptarlo.
+
+| Página | Qué permite |
+| --- | --- |
+| Estado | Salud, jugadores conectados, memoria, temperatura, avisos, versiones y últimos backups. Botones de arrancar, parar, reiniciar y backup |
+| Whitelist | Activar o desactivar; añadir jugadores Java, Bedrock (gamertag) o Bedrock por XUID; quitar; ver los **intentos rechazados** de las últimas 72 horas y permitirlos con un botón; **apertura temporal** para un jugador concreto |
+| Ajustes | MOTD, dificultad, modo de juego, jugadores máximos, distancias, PvP, vuelo y protección del spawn. Guardar reinicia el servidor |
+| Logs | Últimas 100, 200 o 500 líneas |
+| Auditoría | Resultado de `tools/audit.sh` |
+| Mapa | Enlace a BlueMap |
+| Cuenta | Cambio de contraseña |
+
+**Diseño y seguridad:**
+
+- El servidor web corre como el usuario de sistema `mclan-panel`, sin privilegios, y no habla con Docker. Toda operación pasa por `panel/helper.py`, que es lo único que `mclan-panel` puede ejecutar con sudo (`/etc/sudoers.d/mclan-panel`).
+- El helper sólo acepta verbos fijos y nombres que cumplen patrones cerrados; **nunca** envía texto libre a la consola. Los ajustes editables son una lista cerrada: autenticación, puertos y RCON no se tocan desde la web.
+- Las operaciones usan `manage.sh` o su mismo bloqueo, y quedan en `logs/operations.log` como `Operación: panel …`. Sigue habiendo un único responsable del proceso de Paper.
+- `install.sh` comprueba que el helper y todo el código que importa pertenecen a root y no admiten escritura de grupo u otros. Si alguien cambia esos permisos, la regla sudo deja de ser segura.
+- Contraseña con PBKDF2-SHA256. Cookie `Secure`, `HttpOnly` y `SameSite=Strict`, token CSRF y comprobación de `Origin` en cada POST, bloqueo tras 5 fallos en 10 minutos, CSP sin scripts y sin incrustación en otras páginas.
+- Reiniciar el servicio del panel no interrumpe un backup o reinicio ya lanzado (`KillMode=process`).
+
+**Jugadores Bedrock y XUID.** `fwhitelist add GAMERTAG` sólo funciona si la caché global de GeyserMC conoce al jugador. Si no, hay dos salidas:
+
+- Indicar su XUID: el panel lo convierte al UUID de Floodgate.
+- Usar la **apertura temporal**: la whitelist se desactiva hasta que entra ese jugador (máximo 15 minutos), se le añade y se reactiva siempre, también si falla algo. Mientras está abierta puede entrar cualquier cuenta válida de la LAN.
