@@ -434,7 +434,9 @@ class App:
                        for p in status['whitelist']) or '<tr><td colspan="4" class="muted">Nadie en la whitelist</td></tr>'
         rejected = ''.join(
             f'<tr><td>{e(r["name"])}</td><td>{EDITIONS[r["edition"]]}</td><td class="muted">{e(r["last_seen"])}</td><td>'
-            f'{post({"do": "add", "edition": r["edition"], "name": r["name"]}, "Permitir", "primary")}</td></tr>'
+            f'{post({"do": "add", "edition": r["edition"], "name": r["name"]}, "Permitir", "primary")} '
+            + (post({"do": "open", "edition": "bedrock", "name": r["name"], "minutes": "5"}, "Abrir 5 min y esperar")
+               if r["edition"] == "bedrock" else '') + '</td></tr>'
             for r in status['rejected']) or '<tr><td colspan="4" class="muted">Sin intentos rechazados recientes</td></tr>'
         switch = post({'do': 'switch', 'value': 'off' if enabled else 'on'},
                       'Desactivar whitelist' if enabled else 'Activar whitelist', 'danger' if enabled else 'primary')
@@ -470,7 +472,13 @@ class App:
         name = form.get('name', '').strip()
         if action == 'add' and form.get('edition') in EDITIONS:
             result = self.helper(['whitelist-add', form['edition'], name], timeout=60)
-            self.result_flash(session, result, 'Jugador añadido.')
+            if not result.get('ok') and 'not find user in our cache' in (result.get('output') or ''):
+                # Floodgate sólo resuelve gamertags que la caché global de GeyserMC ya conoce.
+                self.flash(session, 'warn', f'Floodgate no conoce todavía a {name}: la caché global de GeyserMC no tiene su '
+                           'identificador de Xbox (XUID). Pulsa «Abrir 5 min y esperar» en su fila y pídele que entre '
+                           'desde Bedrock en esos minutos, o añádelo con su XUID.')
+            else:
+                self.result_flash(session, result, 'Jugador añadido.')
         elif action == 'remove':
             self.result_flash(session, self.helper(['whitelist-remove', name]), 'Jugador quitado.')
         elif action == 'switch' and form.get('value') in ('on', 'off'):

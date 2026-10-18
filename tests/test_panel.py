@@ -450,6 +450,18 @@ class PanelAppTests(unittest.TestCase):
                                            ['whitelist', 'off']])
         self.assertEqual(self.request('POST', '/whitelist', f'csrf={csrf}&do=add&edition=root&name=x', cookie)[0], 400)
 
+    def test_unknown_bedrock_gamertag_offers_temporary_opening(self):
+        cookie, csrf = self.login()
+        page = self.request('GET', '/whitelist', cookie=cookie)[2]
+        self.assertIn(b'Abrir 5 min y esperar', page)
+        self.app.helper = Mock(side_effect=lambda argv, timeout=60: status() if argv[0] == 'status' else {
+            'ok': False, 'output': '[18:15:19 ERROR]: [floodgate] Got an error from requesting the xuid of a Bedrock '
+                                   'player: Unable to find user in our cache. Please try specifying their Floodgate UUID instead'})
+        self.request('POST', '/whitelist', f'csrf={csrf}&do=add&edition=bedrock&name=Otro', cookie)
+        page = self.request('GET', '/whitelist', cookie=cookie)[2].decode()
+        self.assertIn('Floodgate no conoce todavía a Otro', page)
+        self.assertNotIn('Got an error', page)
+
     def test_password_change_invalidates_other_sessions(self):
         first, _ = self.login()
         cookie, csrf = self.login()
