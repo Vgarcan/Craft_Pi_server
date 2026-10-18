@@ -14,7 +14,7 @@ Lo que necesita un jugador real, un dispositivo concreto o una fecha futura qued
 | 1 | Estabilizar la instalación actual | **Completada en hardware**, salvo dos cambios del host que dependen del operador |
 | 2 | Validar el juego real con Java, Bedrock y QuestCraft | **Pendiente**: necesita clientes reales |
 | 3 | Validar la administración | **Parcial**: ciclo de vida, backup, update y ensayo de restore verificados; faltan reinicio de la Pi y carga con jugadores |
-| 4 | Administración web | **Panel propio implementado y verificado en hardware** (0.3.0); falta usarlo con jugadores reales |
+| 4 | Administración web | **Panel propio implementado y verificado en hardware** (0.3.1, auditado); falta usarlo con jugadores reales |
 | 5 | Mapa web | **BlueMap 5.29 integrado y verificado en hardware** (0.3.0); falta medir el render con un mundo explorado |
 
 ## Equipo de referencia
@@ -150,3 +150,46 @@ Decisión: en lugar de Crafty, que exigiría cederle el proceso de Paper (ver [E
 - Añadir a los jugadores desde la página Whitelist. Para el jugador Bedrock sin XUID en caché: XUID o apertura temporal.
 - Probar «Aplicar ajustes», «Backup» y la apertura temporal desde la web con jugadores reales. Están probadas con dobles, no en hardware.
 - Medir BlueMap con un mundo explorado (CPU, temperatura, disco de `data/bluemap`).
+
+## Auditoría de código y seguridad (18-10-2026, 0.3.1)
+
+Dos revisiones de solo lectura (panel y núcleo), seguidas de correcciones y pruebas. Todas las de abajo están implementadas, cubiertas por pruebas automatizadas (96 en total) y desplegadas en la Pi. «Hardware» indica que además se comprobó en la Pi.
+
+| Gravedad | Hallazgo | Corrección | Hardware |
+| --- | --- | --- | --- |
+| Crítica | `verify` leía, reescribía y hacía `chown` como root de `plugins/Geyser-Spigot/dump.json`, controlable por el contenedor (enlace → `/etc/shadow`) | El diagnóstico se lee y se borra dentro del contenedor (`probe.py dump`) | `update` y `verify` correctos |
+| Alta | Un cliente TCP mudo bloqueaba todo el panel (handshake TLS en el bucle de aceptación) | TLS por conexión en su hilo, con timeout | Probado con TLS real en pruebas |
+| Alta | `Content-Length` negativo: cuerpo sin límite en memoria | Cabecera estricta; `Transfer-Encoding` rechazado | — |
+| Alta | El helper (root) seguía enlaces en `data/` al leer o escribir `server.properties`, `whitelist.json`, logs y `level.dat` | Abridor sin enlaces en ningún componente, sólo archivos regulares, topes de tamaño; escritura con `dir_fd` y `fchown` | Estado y whitelist correctos |
+| Alta | `.dockerignore` excluía `bluemap-setup.sh`: el build habría fallado | Añadido, con prueba que cruza `COPY` y `.dockerignore` | Imagen construida |
+| Alta | `restore` sin estado gestionado borraba un `data/` copiado a mano | Se conserva en `state/pre-restore-*` | — |
+| Media | Carrera en el límite de login; PBKDF2 ilimitado | Intento reservado antes del hash; semáforo de 2 | — |
+| Media | Sin límite de conexiones | 32 en total, 8 por IP | — |
+| Media | El chat podía fabricar «intentos rechazados» | Patrones anclados al prefijo de log de Paper | Rechazo real detectado |
+| Media | Apertura temporal: mezclaba Java/Bedrock y no expulsaba a otros | Edición explícita; expulsión al cerrar | — (pendiente con jugadores) |
+| Media | `update` con el servidor parado retiraba la marca sin verificar | Arranca, verifica y vuelve a parar | — |
+| Media | Backups «verificados» sin `fsync` | `fsync` del archivo y del directorio; también en escrituras atómicas | Backup `pre-update` correcto |
+| Media | `restore` no validaba la IP ni la imagen base del backup | IP privada asignada al host y digest de Temurin validados | — |
+| Media | Recorridos de `data/` incluían todas las teselas del mapa | `os.walk` podando las exclusiones | — |
+| Media | Un fallo de la web de BlueMap tumbaba un update | Aviso, no fallo | — |
+| Baja | Evidencia NetherNet perdida al rotar `docker logs` | Respaldo en `latest.log`, leído en el contenedor | — |
+| Baja | `minecraft:stop` esquivaba el filtro de consola | Se compara sin espacio de nombres | — |
+| Baja | IP LAN pública o de VPN aceptada | Sólo privadas | — |
+| Baja | `audit.sh` abortaba sin `backups/` o `whitelist.json` | Tolerante | — |
+| Baja | Sin `Host` ni `Origin` en el login; cookie sin `__Host-`; sesiones sin purga | Corregido | `Host` ajeno → 421 |
+| Info | `manage.sh`/`install.sh` sin `python3 -I` | Añadido | `update` correcto |
+
+Además, en hardware:
+
+- **BlueMap negro de cerca:** sólo se generaban teselas lejanas, porque Paper/Moonrise no deja la luz en el formato que espera BlueMap. Con `ignore-missing-light-data` se generaron 144 teselas de detalle por mapa. El navegador conservaba además una posición sin terreno (x −635, z −5927); el spawn está en (−32, 64, 0).
+- **Panel «no se muestra»:** se abría sin `https://`. Ahora `http://…:8443` responde con 301 a HTTPS.
+- **Controles de consumo:** pausar y reanudar el render, y desactivar y activar BlueMap, probados en la Pi. Desactivado: JAR retirado, web parada y juego verificado.
+
+### Pendientes de la auditoría (no corregidos)
+
+- `validate()` comprueba enlaces en `data/` y después lee `server.properties` como root: queda una ventana TOCTOU con el servidor en marcha. Mitigación futura: leerlo dentro del contenedor.
+- El override `restart: "no"` de las transacciones cambia el hash de configuración de Compose y puede recrear el contenedor en el siguiente `start` (sospechado, sin reproducir).
+- Snapshot: el mundo se lee dos veces (hash y tar) y el archivo varias. Optimizable con hash en streaming y validación en una pasada.
+- Propuestas operativas: rotación y exportación de backups a USB, backup programado con aviso a jugadores, `restore --dry-run`, menos ruido del healthcheck RCON en el log.
+- La imagen instala `python3` por APT sin fijar versión (no es reproducible bit a bit).
+- La contraseña inicial del panel apareció en una captura compartida: **cámbiala**.

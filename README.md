@@ -441,7 +441,20 @@ Desde la 0.3.0, cada release incluye **BlueMap**, un plugin de Paper dentro del 
 - `plugins/BlueMap/core.conf` se crea una sola vez con un perfil para la Pi: un hilo de render y métricas desactivadas. Después puedes editarlo; no se sobrescribe.
 - `accept-download: true` acepta la EULA de Minecraft para descargar las texturas del cliente desde Mojang. Sólo se escribe si `eula.txt` ya registra tu aceptación.
 - Los backups no incluyen `data/bluemap/web/maps`: las teselas se regeneran tras un restore.
-- `verify` comprueba que BlueMap está habilitado en Paper y que su web responde.
+- `verify` comprueba que BlueMap está habilitado en Paper. Que su web no responda es sólo un aviso: el mapa es accesorio y no debe tumbar un update.
+- **Paper 26.x y la luz:** Moonrise no deja la luz en el formato que espera BlueMap, y sin ajuste sólo se renderiza la vista lejana: de cerca el mapa se ve negro. `docker/bluemap-setup.sh` activa `ignore-missing-light-data` una vez en cada mapa, marcado con `# craft-pi: light-fix`. Si lo reviertes a mano, se respeta. Corre dentro del contenedor, como su usuario, en cada arranque y en `verify` tras el primero.
+- Si al abrir el mapa sólo ves negro, puede que el navegador conserve en la URL una posición sin terreno generado. Usa el enlace **Ver mapa en el spawn** del panel.
+
+**Consumo.** Desde el panel (Estado → Módulos y consumo) o la terminal:
+
+```bash
+sudo ./manage.sh command "bluemap stop"   # pausa el render al momento; la web sigue
+sudo ./manage.sh command "bluemap start"
+sudo ./manage.sh plugin bluemap off       # retira el plugin y libera su memoria (reinicia)
+sudo ./manage.sh plugin bluemap on
+```
+
+Desactivado, `.env` incluye `DISABLED_PLUGINS=bluemap` y el entrypoint no copia el JAR. En la Pi, el contenedor recién arrancado pasó de unos 1,34 GiB a 1,14 GiB.
 
 Para limitar más el render (por ejemplo `min-inhabited-time` o `render-mask` con radio), edita `plugins/BlueMap/maps/*.conf` con el servidor parado. Consulta la [documentación de BlueMap](https://bluemap.bluecolored.de/wiki/configs/Maps.html).
 
@@ -454,7 +467,7 @@ sudo panel/install.sh --reset-password # nueva contraseña desde la terminal
 sudo panel/install.sh --uninstall
 ```
 
-Abre `https://IP_DE_LA_PI:8443/` desde la LAN. El certificado es autofirmado: el navegador avisará la primera vez. Compara su huella SHA-256 con la que imprime `install.sh` antes de aceptarlo.
+Abre `https://IP_DE_LA_PI:8443/` desde la LAN. Si escribes la dirección sin `https://`, el panel redirige solo. El certificado es autofirmado: el navegador avisará la primera vez. Compara su huella SHA-256 con la que imprime `install.sh` antes de aceptarlo.
 
 | Página | Qué permite |
 | --- | --- |
@@ -472,7 +485,9 @@ Abre `https://IP_DE_LA_PI:8443/` desde la LAN. El certificado es autofirmado: el
 - El helper sólo acepta verbos fijos y nombres que cumplen patrones cerrados; **nunca** envía texto libre a la consola. Los ajustes editables son una lista cerrada: autenticación, puertos y RCON no se tocan desde la web.
 - Las operaciones usan `manage.sh` o su mismo bloqueo, y quedan en `logs/operations.log` como `Operación: panel …`. Sigue habiendo un único responsable del proceso de Paper.
 - `install.sh` comprueba que el helper y todo el código que importa pertenecen a root y no admiten escritura de grupo u otros. Si alguien cambia esos permisos, la regla sudo deja de ser segura.
-- Contraseña con PBKDF2-SHA256. Cookie `Secure`, `HttpOnly` y `SameSite=Strict`, token CSRF y comprobación de `Origin` en cada POST, bloqueo tras 5 fallos en 10 minutos, CSP sin scripts y sin incrustación en otras páginas.
+- Contraseña con PBKDF2-SHA256 (dos cálculos simultáneos como máximo). Cookie `__Host-` con `Secure`, `HttpOnly` y `SameSite=Strict`, token CSRF y comprobación de `Origin` en cada POST (también en el login), bloqueo tras 5 fallos en 10 minutos, CSP sin scripts y sin incrustación en otras páginas.
+- Sólo atiende el `Host` con el que se publica (contra DNS rebinding). TLS por conexión en su propio hilo, `Content-Length` estricto y límite de 32 conexiones en total y 8 por IP.
+- `data/` pertenece al usuario del contenedor: el helper no sigue enlaces en ningún componente de la ruta, sólo lee archivos regulares y con tope, y escribe `server.properties` mediante descriptores de directorio. El diagnóstico de Geyser se lee dentro del contenedor.
 - Reiniciar el servicio del panel no interrumpe un backup o reinicio ya lanzado (`KillMode=process`).
 
 **Jugadores Bedrock y XUID.** `fwhitelist add GAMERTAG` sólo funciona si la caché global de GeyserMC conoce al jugador. Si no, hay dos salidas:
