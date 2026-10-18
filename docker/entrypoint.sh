@@ -17,7 +17,7 @@ mkdir -p /data/plugins
 disabled() {
     case " ${MCLAN_DISABLED_PLUGINS:-} " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
-for jar in Geyser-Spigot.jar floodgate-spigot.jar BlueMap.jar Chunky.jar; do
+for jar in Geyser-Spigot.jar floodgate-spigot.jar BlueMap.jar Chunky.jar ViaVersion.jar ViaBackwards.jar; do
     if [ -L /data/plugins/"$jar" ]; then
         echo 'No se admiten enlaces en las rutas de los plugins gestionados.' >&2
         exit 1

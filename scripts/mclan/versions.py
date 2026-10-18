@@ -11,13 +11,20 @@ PAPER = "https://fill.papermc.io/v3/projects/paper"
 GEYSER = "https://download.geysermc.org/v2/projects"
 SUPPORTED = "https://geysermc.org/wiki/geyser/supported-versions/"
 HANGAR = "https://hangar.papermc.io/api/v1/projects"
-# Plugins resueltos en Hangar: clave del lock → proyecto. BlueMap (mapa web) y Chunky
-# (pregeneración de terreno; en reposo no consume CPU).
-HANGAR_PLUGINS = {"bluemap": "Blue/BlueMap", "chunky": "pop4959/Chunky"}
+# Plugins resueltos en Hangar: clave del lock → proyecto. BlueMap (mapa web), Chunky
+# (pregeneración de terreno; en reposo no consume CPU) y ViaVersion + ViaBackwards (dejan
+# entrar a clientes Java de otras versiones, p. ej. QuestCraft en Meta Quest; el servidor
+# y el mundo siguen en la versión que fija Geyser).
+HANGAR_PLUGINS = {"bluemap": "Blue/BlueMap", "chunky": "pop4959/Chunky",
+                  "viaversion": "ViaVersion/ViaVersion", "viabackwards": "ViaVersion/ViaBackwards"}
 # Clave del lock → nombre del JAR en releases/<id>/ (y en data/plugins para los plugins).
 # Una release antigua puede no incluir todos: usa managed_jars(lock).
 JARS = {"paper": "paper.jar", "geyser": "Geyser-Spigot.jar", "floodgate": "floodgate-spigot.jar",
-        "bluemap": "BlueMap.jar", "chunky": "Chunky.jar"}
+        "bluemap": "BlueMap.jar", "chunky": "Chunky.jar", "viaversion": "ViaVersion.jar",
+        "viabackwards": "ViaBackwards.jar"}
+# Nombres para mostrar de los plugins opcionales (resúmenes de update).
+EXTRA_PLUGINS = (("bluemap", "BlueMap"), ("chunky", "Chunky"), ("viaversion", "ViaVersion"),
+                 ("viabackwards", "ViaBackwards"))
 
 
 def managed_jars(lock):
@@ -68,7 +75,9 @@ def bluemap(client, minecraft):
 def hangar(client, key, minecraft):
     """Última versión Release del plugin para Paper que declara soporte de esa versión exacta."""
     project = HANGAR_PLUGINS[key]
-    versions = client.json(f"{HANGAR}/{project}/versions?limit=25&offset=0&platform=PAPER")["result"]
+    # Filtrar por canal en la API: proyectos con muchas snapshots (Via) dejarían la última
+    # Release fuera de la página. El filtro local se mantiene por si la API lo ignora.
+    versions = client.json(f"{HANGAR}/{project}/versions?limit=25&offset=0&platform=PAPER&channel=Release")["result"]
     compatible = [v for v in versions if v["channel"]["name"] == "Release"
                   and minecraft in v["platformDependencies"].get("PAPER", [])]
     if not compatible:
@@ -89,7 +98,7 @@ def resolve(client, requested="auto"):
     version = supported["java"] if requested == "auto" else requested
     if version != supported["java"]:
         raise Error(f"Geyser publicado requiere Java {supported['java']}; pedido {version}. "
-                    "Este proyecto no añade ViaVersion ni actualiza mundos implícitamente.")
+                    "El servidor no se fuerza a otra versión ni se actualizan mundos implícitamente.")
     build = stable_build(client.json(f"{PAPER}/versions/{version}/builds"))
     metadata = client.json(f"{PAPER}/versions/{version}")
     java = int(metadata["version"]["java"]["version"]["minimum"])

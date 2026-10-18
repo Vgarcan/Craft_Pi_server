@@ -33,7 +33,9 @@ FIXTURES = ROOT / 'tests/fixtures'
 class FakeClient:
     def json(self, url):
         if 'hangar.papermc.io' in url:
-            return read_json(FIXTURES / ('hangar_chunky.json' if 'Chunky' in url else 'hangar_bluemap.json'))
+            name = next(n for p, n in (('ViaBackwards', 'viabackwards'), ('ViaVersion', 'viaversion'),
+                                       ('Chunky', 'chunky'), ('BlueMap', 'bluemap')) if p in url)
+            return read_json(FIXTURES / f'hangar_{name}.json')
         if '/geyser/' in url:
             return read_json(FIXTURES / 'geyser_build.json')
         if '/floodgate/' in url:
@@ -72,6 +74,19 @@ class VersionsTests(unittest.TestCase):
         self.assertIn('bluemap', lock)
         self.assertEqual(lock['chunky']['version'], '1.5.3')
         self.assertEqual(lock['chunky']['sha256'], '530d2c7430a96a39957391b7088be144daa3108f7665896d1c23aa8dd4af32f3')
+
+    def test_via_plugins_pick_the_release_not_newer_snapshots(self):
+        urls = []
+        client = FakeClient()
+        client.json = lambda url: urls.append(url) or FakeClient().json(url)
+        lock = versions.resolve(client)
+        self.assertEqual(lock['viaversion']['version'], '5.12.1')
+        self.assertEqual(lock['viaversion']['sha256'], 'bab94b846e1d2bf516c070562d0271b32382afd41870bf0d3a7993b73a36f791')
+        self.assertEqual(lock['viabackwards']['version'], '5.12.1')
+        self.assertEqual(lock['viabackwards']['sha256'], '4b9dd5cb7662f532b44627f8491255bf96f586cbd00280d1480442590ad4450d')
+        valid_url(lock['viabackwards']['url'])
+        # La API filtra por canal: muchas snapshots no pueden dejar la Release fuera de la página.
+        self.assertTrue(all('channel=Release' in url for url in urls if 'hangar' in url))
 
     def test_bluemap_newest_release_declaring_exact_version(self):
         lock = versions.resolve(FakeClient())

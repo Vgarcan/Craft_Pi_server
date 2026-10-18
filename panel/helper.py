@@ -495,6 +495,7 @@ class Panel:
                'floodgate': active['floodgate']['version'],
                'bluemap': active.get('bluemap', {}).get('version'),
                'chunky': active.get('chunky', {}).get('version'),
+               'viaversion': active.get('viaversion', {}).get('version'),
                'bedrock': active['compatibility']['bedrock']},
             'container': {'exists': bool(info), 'running': running, 'status': state.get('Status'),
                           'health': state.get('Health', {}).get('Status'),

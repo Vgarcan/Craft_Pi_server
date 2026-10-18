@@ -184,8 +184,7 @@ def update(runtime, args, client):
     requested = args.minecraft_version or active['minecraft']
     proposal = versions.resolve(client, requested)
     for label, lock in (('Actual', active), ('Propuesta', proposal)):
-        extras = ''.join(f"; {name} {lock[key]['version']}" for key, name in (('bluemap', 'BlueMap'), ('chunky', 'Chunky'))
-                         if key in lock)
+        extras = ''.join(f"; {name} {lock[key]['version']}" for key, name in versions.EXTRA_PLUGINS if key in lock)
         print(f"{label}: Minecraft {lock['minecraft']}; Paper {lock['paper']['build']}; "
               f"Geyser {lock['geyser']['build']}; Floodgate {lock['floodgate']['build']}{extras}")
     if project_changed:

@@ -189,7 +189,7 @@ La primera instalación sigue esta secuencia:
 
 La evidencia documental anterior no sustituye el ensayo de arranque. Floodgate no publica una matriz universal que permita demostrar toda compatibilidad mediante números: se comprueba además su carga efectiva y la autenticación configurada en la instancia real. El acceso de jugadores se confirma con la prueba manual LAN.
 
-`state/active.json` y `releases/<id>/versions.lock.json` conservan builds, URLs, hashes, versión de Minecraft, Java, digest, fuentes de compatibilidad y versión de esquema. Los snapshots conservan estos datos y los tres JARs.
+`state/active.json` y `releases/<id>/versions.lock.json` conservan builds, URLs, hashes, versión de Minecraft, Java, digest, fuentes de compatibilidad y versión de esquema. Los snapshots conservan estos datos y todos los JARs gestionados.
 
 **Idempotencia:** repetir `install.sh` sobre una instalación activa no consulta `latest`, no sustituye la configuración ni vuelve a crear el mundo. Comprueba y arranca la release ya fijada. Las actualizaciones necesitan `manage.sh update`.
 
@@ -198,6 +198,8 @@ La evidencia documental anterior no sustituye el ensayo de arranque. Floodgate n
 ## 6. Conexión Java y Bedrock
 
 **Java, Windows/macOS/Linux:** usa la versión que muestra el instalador. Multijugador → Añadir servidor → `IP_DE_LA_PI:25565`. Se mantiene la autenticación normal de Java: necesitas una cuenta y licencia Java válidas.
+
+**Java de otras versiones (p. ej. QuestCraft en Meta Quest):** desde la 0.6.2 el servidor lleva **ViaVersion** y **ViaBackwards**, resueltos en Hangar como BlueMap y Chunky (última Release que declara la versión exacta de Paper, con SHA-256 fijado). Permiten entrar con clientes Java más antiguos (ViaBackwards admite hasta la 1.10) o algo más nuevos que la versión del servidor. El servidor y el mundo no cambian de versión. Los bloques y objetos que no existen en la versión del cliente se muestran con un sustituto. Si el cliente es demasiado antiguo, la lista de servidores sigue mostrando la versión en rojo.
 
 **Bedrock, dispositivos con la opción de añadir un servidor externo:** Jugar → Servidores → Añadir servidor → nombre libre, dirección `IP_DE_LA_PI`, puerto `19132`. La cuenta/autenticación Bedrock se mantiene; Floodgate permite entrar sin comprar además la edición Java.
 
@@ -426,6 +428,7 @@ Fuentes revisadas el **18 de octubre de 2026**. El instalador vuelve a consultar
 - [API de descargas Paper](https://docs.papermc.io/misc/downloads-service/) y [requisitos Java](https://docs.papermc.io/misc/java-install/).
 - [Preparación de GeyserMC para NetherNet](https://geysermc.org/blog/preparing-for-nethernet) y [configuración de Geyser](https://geysermc.org/wiki/geyser/setup/).
 - [Compatibilidad Geyser](https://geysermc.org/wiki/geyser/supported-versions/), [configuración](https://geysermc.org/wiki/geyser/understanding-the-config/) y [Floodgate](https://geysermc.org/wiki/floodgate/).
+- [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion) y [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards): versiones de cliente admitidas.
 - [Código fuente Geyser](https://github.com/GeyserMC/Geyser): configuración, constante de esquema, diagnóstico y comando `dump offline` contrastados con el commit de la build inspeccionada.
 - [Raspberry Pi Imager](https://www.raspberrypi.com/software/) y [EULA Minecraft](https://www.minecraft.net/eula).
 

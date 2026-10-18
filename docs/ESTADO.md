@@ -284,3 +284,10 @@ Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa
 ### Pendiente
 
 - Subida web de punta a punta en la Pi con un archivo real (implementada y probada con pruebas automatizadas; falta verificarla en hardware).
+
+## 0.6.2: clientes Java de otras versiones (19-10-2026)
+
+- **Problema:** QuestCraft (Java en Meta Quest) mostraba el servidor como incompatible («Paper 26.3» en rojo). El rechazo ocurre en el cliente tras el ping, así que el servidor no registra nada.
+- **Cambio:** ViaVersion 5.12.1 y ViaBackwards 5.12.1 pasan a ser plugins gestionados, como BlueMap y Chunky. Se usa la última Release de Hangar que declara Paper 26.3, con SHA-256 fijado. El resolutor de Hangar pide ahora `channel=Release`, porque Via publica muchas snapshots que dejarían la Release fuera de la página. El servidor y el mundo siguen en 26.3.
+- **Pruebas:** 128, entre ellas la elección de la Release frente a snapshots más nuevas.
+- **Pendiente de hardware:** conexión real desde QuestCraft tras `manage.sh update`.

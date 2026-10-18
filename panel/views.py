@@ -271,6 +271,7 @@ class Views:
             + self.card('Versions', f'<p class="muted mono">Minecraft {e(release["minecraft"])} · Paper {e(release["paper"])} · '
                         f'Geyser {e(release["geyser"])} · Floodgate {e(release["floodgate"])} · BlueMap '
                         f'{e(release.get("bluemap") or "—")} · Chunky {e(release.get("chunky") or "—")} · '
+                        f'ViaVersion {e(release.get("viaversion") or "—")} · '
                         f'release {e(release["id"])}</p>', 'thin', icon=self.texture('book', '', 'icon')))
 
     def alerts(self, status):
