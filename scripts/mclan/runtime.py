@@ -7,6 +7,7 @@ import secrets
 import time
 import zipfile
 
+from . import addons
 from .common import Error, LOG, atomic_write, create_only, read_json, run, sha256, write_json
 from .classfile import integer_constant
 from .versions import managed_jars
@@ -26,6 +27,17 @@ BLUEMAP_PORT = 8100
 # Paper con Moonrise (26.x) ya no escribe el mensaje vanilla de guardado final.
 VANILLA_SAVED = 'All dimensions are saved'
 MOONRISE_SAVED = ('Saving worlds', 'Halted I/O scheduler for world', 'All RegionFile I/O tasks to complete')
+
+
+def pin_temurin(variant):
+    """Descarga eclipse-temurin:<variant> para ARM64 y devuelve su digest inmutable."""
+    tag = f"eclipse-temurin:{variant}"
+    run(['docker', 'pull', '--platform', 'linux/arm64', tag])
+    digests = json.loads(run(['docker', 'image', 'inspect', tag, '--format', '{{json .RepoDigests}}'], capture=True).stdout)
+    digest = next((d for d in digests if re.fullmatch(r'(?:docker.io/library/)?eclipse-temurin@sha256:[a-f0-9]{64}', d)), None)
+    if not digest:
+        raise Error('No se pudo fijar el digest de Temurin.')
+    return digest
 
 
 def shutdown_saved(log):
@@ -113,6 +125,8 @@ class Runtime:
         release = self.root / 'releases' / lock['id']
         release.mkdir(parents=True, exist_ok=True)
         for key, name in managed_jars(lock):
+            if key in addons.ADDONS:
+                continue  # se compilan más abajo, con el JDK fijado
             client.download(lock[key], release / name)
             with zipfile.ZipFile(release / name) as jar:
                 if key != 'paper' and 'plugin.yml' not in jar.namelist():
@@ -127,17 +141,20 @@ class Runtime:
         lock['geyser_config_version'] = config_version
         # Una misma resolución reutiliza su imagen/digest, sin mover etiquetas al reiniciar.
         staged = release / 'versions.lock.json'
-        if staged.exists():
-            existing = read_json(staged)
-            lock['java_base'] = existing['java_base']
-        else:
-            tag = f"eclipse-temurin:{lock['java']}-jre-jammy"
-            run(['docker', 'pull', '--platform', 'linux/arm64', tag])
-            digests = json.loads(run(['docker', 'image', 'inspect', tag, '--format', '{{json .RepoDigests}}'], capture=True).stdout)
-            digest = next((d for d in digests if re.fullmatch(r'(?:docker.io/library/)?eclipse-temurin@sha256:[a-f0-9]{64}', d)), None)
-            if not digest:
-                raise Error('No se pudo fijar el digest de Temurin.')
-            lock['java_base'] = digest
+        existing = read_json(staged) if staged.exists() else {}
+        lock['java_base'] = existing.get('java_base') or pin_temurin(f"{lock['java']}-jre-jammy")
+        built = [key for key in addons.ADDONS if key in lock]
+        if built:
+            # El JDK sólo compila los addons; la imagen del servidor sigue usando el JRE.
+            lock['jdk_base'] = existing.get('jdk_base') or pin_temurin(f"{lock['java']}-jdk-jammy")
+            for key in built:
+                lock[key] = dict(lock[key])
+                if existing.get(key, {}).get('source_sha256') == lock[key]['source_sha256'] \
+                        and (release / addons.ADDONS[key][1]).exists() \
+                        and sha256(release / addons.ADDONS[key][1]) == existing[key].get('sha256'):
+                    lock[key]['sha256'] = existing[key]['sha256']
+                else:
+                    lock[key]['sha256'] = sha256(addons.build(self.root, release, lock, key))
         # La imagen se identifica también por el código de arranque/salud y la base Java.
         import hashlib
         material = lock['java_base'] + ''.join(sha256(self.root / 'docker' / n) for n in RUNTIME_FILES)

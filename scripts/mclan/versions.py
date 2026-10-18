@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 import json
 import re
 from datetime import datetime, timezone
+from . import addons
 from .common import Error
 
 PAPER = "https://fill.papermc.io/v3/projects/paper"
@@ -21,10 +22,10 @@ HANGAR_PLUGINS = {"bluemap": "Blue/BlueMap", "chunky": "pop4959/Chunky",
 # Una release antigua puede no incluir todos: usa managed_jars(lock).
 JARS = {"paper": "paper.jar", "geyser": "Geyser-Spigot.jar", "floodgate": "floodgate-spigot.jar",
         "bluemap": "BlueMap.jar", "chunky": "Chunky.jar", "viaversion": "ViaVersion.jar",
-        "viabackwards": "ViaBackwards.jar"}
+        "viabackwards": "ViaBackwards.jar", **{key: jar for key, (_, jar) in addons.ADDONS.items()}}
 # Nombres para mostrar de los plugins opcionales (resúmenes de update).
 EXTRA_PLUGINS = (("bluemap", "BlueMap"), ("chunky", "Chunky"), ("viaversion", "ViaVersion"),
-                 ("viabackwards", "ViaBackwards"))
+                 ("viabackwards", "ViaBackwards"), ("mclan_skins", "MclanSkins"))
 
 
 def managed_jars(lock):
@@ -113,6 +114,7 @@ def resolve(client, requested="auto"):
             "paper": {"build": int(build["id"]), "sha256": artifact["checksums"]["sha256"],
                       "url": artifact["url"]}, "geyser": geyser, "floodgate": floodgate,
             **{key: hangar(client, key, version) for key in HANGAR_PLUGINS},
+            **addons.describe(),
             "compatibility": {**supported, "source": SUPPORTED,
                               "source_sha256": hashlib.sha256(html.encode()).hexdigest()}}
     # Cambios de presentación en la web no deben producir una release nueva.

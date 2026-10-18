@@ -291,3 +291,21 @@ Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa
 - **Cambio:** ViaVersion 5.12.1 y ViaBackwards 5.12.1 pasan a ser plugins gestionados, como BlueMap y Chunky. Se usa la última Release de Hangar que declara Paper 26.3, con SHA-256 fijado. El resolutor de Hangar pide ahora `channel=Release`, porque Via publica muchas snapshots que dejarían la Release fuera de la página. El servidor y el mundo siguen en 26.3.
 - **Pruebas:** 128, entre ellas la elección de la Release frente a snapshots más nuevas.
 - **Pendiente de hardware:** conexión real desde QuestCraft tras `manage.sh update`.
+
+## 0.7.0: skins de Bedrock (19-10-2026)
+
+- **Diagnóstico** (código de Geyser 2.12 y Floodgate 2.2.5, contrastado con los JAR instalados):
+  - Floodgate aplica al jugador Bedrock la conversión Java de su skin (API de GeyserMC, textura plana de 64×64).
+  - Desde Bedrock 1.21.130 el cliente toma todas las skins, también la propia, de la lista de jugadores. Cuando el perfil tiene una skin Java, Geyser manda esa y descarta la original. Por eso el bicho azul se veía «aplanado» incluso tras reiniciar.
+  - Geyser no tiene ninguna opción para evitarlo. Desactivar `validate-bedrock-login` lo haría, pero rompe la autenticación, así que se descarta.
+- **Cambio:** addon propio `addons/mclan-skins` (MclanSkins 1.0.0, Paper). Cancela el `SkinApplyEvent` de Floodgate, la vía oficial de su API:
+  - Java ve la skin por defecto.
+  - Geyser recurre a la skin Bedrock original para los clientes Bedrock.
+  - Configurable con `java-skin: default|converted`.
+- **Compilación:** `scripts/mclan/addons.py` lo compila en `stage()`, en un JDK Temurin fijado por digest (`jdk_base`) y sin red, contra las librerías de la release. El hash del código entra en la identidad de la release.
+- **Límites:**
+  - Las skins persona o de más de 128×128 no las conserva Geyser.
+  - Los cambios de skin en mitad de la partida exigen reconectar. Para Java, la API sólo acepta datos firmados en el login; para Bedrock, Geyser no traduce `PlayerSkinPacket`.
+- **Pruebas:** 132, entre ellas identidad por código, compilación sin red con montajes de sólo lectura y rechazo de enlaces y de código cambiado durante la actualización.
+- **Depuración temporal:** `debug-mode: true` en la configuración de Geyser para ver el tipo de skin al conectar. Se retira después.
+- **Pendiente de hardware:** compilación real en la Pi y comprobación visual en Bedrock (propia y de otros jugadores Bedrock) y en Java.
