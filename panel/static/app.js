@@ -221,6 +221,59 @@
     input.focus({ preventScroll: true });
   }
 
+  // --- Subida de mundos: XHR para tener progreso; al terminar se lanza la importación ---------
+  function initUpload(root) {
+    const form = $('[data-upload]', root);
+    if (!form) return;
+    const input = $('input[type=file]', form);
+    const name = $('input[name=name]', form);
+    const bar = $('[data-upload-bar]', form);
+    const status = $('[data-upload-status]', form);
+    const button = $('button', form);
+    input.addEventListener('change', () => {
+      const file = input.files[0];
+      if (file && !name.value) name.value = file.name.replace(/\.(zip|mcworld)$/i, '').slice(0, 40);
+    });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const file = input.files[0];
+      if (!file) return;
+      const safeName = file.name.replace(/[^A-Za-z0-9._ -]/g, '_').replace(/^[^A-Za-z0-9]+/, '');
+      // Comprobación previa: el servidor rechaza sin leer el cuerpo y el navegador sólo vería un corte.
+      try {
+        const check = await getJSON(`/api/upload-check?name=${encodeURIComponent(safeName)}&size=${file.size}`);
+        if (!check.ok) { status.textContent = `Cannot upload: ${check.error}`; return; }
+      } catch { status.textContent = 'The panel could not be reached.'; return; }
+      const request = new XMLHttpRequest();
+      request.open('POST', '/upload');
+      request.setRequestHeader('X-CSRF-Token', csrf());
+      request.setRequestHeader('X-Filename', encodeURIComponent(safeName));
+      request.setRequestHeader('Content-Type', 'application/octet-stream');
+      bar.hidden = false;
+      button.disabled = true;
+      request.upload.addEventListener('progress', (e) => {
+        if (!e.lengthComputable) return;
+        const pct = (e.loaded * 100) / e.total;
+        $('.fill', bar).className = `fill ${width(pct)}`;
+        status.textContent = `Uploading… ${Math.round(pct)}% (${(e.loaded / 1048576).toFixed(0)} / ${(e.total / 1048576).toFixed(0)} MiB)`;
+      });
+      request.addEventListener('load', () => {
+        let reply = {};
+        try { reply = JSON.parse(request.responseText); } catch { /* respuesta no JSON */ }
+        if (request.status === 200 && reply.ok) {
+          status.textContent = 'Uploaded. Starting the import…';
+          form.elements.file.value = reply.name;
+          form.submit();  // POST normal: crea la tarea de importación
+        } else {
+          status.textContent = `Upload failed: ${reply.error || request.status}`;
+          button.disabled = false;
+        }
+      });
+      request.addEventListener('error', () => { status.textContent = 'Upload failed: the connection was interrupted.'; button.disabled = false; });
+      request.send(file);
+    });
+  }
+
   // --- Tareas largas ----------------------------------------------------------------------
   function initJob(root) {
     const marker = $('[data-job]', root);
@@ -239,6 +292,7 @@
     $$('.toast', root).forEach((toast) => setTimeout(() => toast.classList.add('hide'), 7000));
     if ($('[data-live]')) every($('[data-live="online"]') ? 10000 : 20000, pulse);
     initConsole(root);
+    initUpload(root);
     initJob(root);
     onScroll();
   }

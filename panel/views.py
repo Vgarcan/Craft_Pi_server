@@ -497,11 +497,22 @@ class Views:
                         'pattern="-?[0-9]{1,19}" maxlength="20"><p class="muted">It is generated the first time you activate it. '
                         'Pre-generate it from Console with Chunky to keep the Pi smooth.</p>'
                         '<p><button class="mc-btn primary">Create</button></p></form>', icon=self.texture('crafting_table_front', '', 'icon'))
-            + self.card('Import a world', '<p class="muted">Copy a Java world (<code>.zip</code>) or a Bedrock world '
-                        '(<code>.mcworld</code>) into <code>/opt/minecraft-lan-installer/imports/</code> on the Pi, for example by '
-                        'dragging it into VS Code. Bedrock worlds are converted with Chunker in an isolated container; '
-                        'mobs and dropped items do not survive the conversion.</p>' + import_form,
-                        icon=self.texture('ender_pearl', '', 'icon'))
+            + self.card('Import a world',
+                        f'<form class="upload" data-upload method="post" action="/world">{self.csrf(session)}'
+                        '<input type="hidden" name="do" value="world-import"><input type="hidden" name="file" value="">'
+                        '<label for="upf">World file (.zip Java or .mcworld Bedrock, up to 2 GiB)</label>'
+                        '<input id="upf" type="file" accept=".zip,.mcworld" required>'
+                        '<label for="upn">Name in the library</label><input id="upn" type="text" name="name" maxlength="40" required>'
+                        '<div class="bar xp" hidden data-upload-bar><div class="fill w-0"></div></div>'
+                        '<p class="muted" data-upload-status></p>'
+                        '<p><button class="mc-btn primary">Upload and import</button></p>'
+                        '<noscript><p class="muted">Uploading needs JavaScript. You can still copy the file into '
+                        'the imports folder and pick it below.</p></noscript></form>'
+                        '<details><summary>Files already on the Pi</summary><p class="muted">Files copied into '
+                        '<code>/opt/minecraft-lan-installer/imports/</code> (for example by dragging them into VS Code).</p>'
+                        + import_form + '</details>'
+                        '<p class="muted">Bedrock worlds are converted with Chunker in an isolated container; mobs and dropped '
+                        'items do not survive the conversion.</p>', icon=self.texture('ender_pearl', '', 'icon'))
             + '</div>'
             + self.card('Exports', self.table(('File', 'Size', 'Created'), exports, 'No exports yet'),
                         icon=self.texture('chest_minecart', '', 'icon')))

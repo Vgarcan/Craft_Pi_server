@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import socket
 import ssl
 import stat
@@ -24,6 +25,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 from urllib.parse import parse_qs, urlsplit
 
 HERE = Path(__file__).resolve().parent
@@ -38,6 +40,12 @@ LEGACY = {'/whitelist': '/players', '/ajustes': '/world', '/logs': '/console', '
           '/cuenta': '/account', '/mapa': '/map'}
 SESSION_TTL = 12 * 3600
 MAX_BODY = 16 * 1024
+# Subida de mundos: se escribe por bloques en imports/, nunca en memoria. Una a la vez.
+MAX_UPLOAD = 2 * 1024**3
+UPLOAD_MARGIN = 4 * 1024**3
+UPLOAD_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._ -]{0,99}\.(?:zip|mcworld)')
+ZIP_MAGIC = (b'PK\x03\x04', b'PK\x05\x06')
+UPLOADING = threading.Lock()
 FAILURE_WINDOW, MAX_FAILURES = 600, 5
 MAX_SESSIONS, MAX_TRACKED_IPS = 20, 1024
 MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP = 32, 8
@@ -234,6 +242,70 @@ class App:
             return self.render('Not found', '<p><a href="/" data-nav>Back to the dashboard</a></p>', session, status=404)
         return handler(session, form, query)
 
+    def upload_problem(self, name, length):
+        """Validación compartida por /api/upload-check (antes de enviar) y /upload."""
+        if not 0 < length <= MAX_UPLOAD:
+            return 413, f'files must be under {MAX_UPLOAD // 2**30} GiB'
+        if not UPLOAD_NAME.fullmatch(name):
+            return 400, 'only .zip (Java) or .mcworld (Bedrock) files with a simple name (letters, digits, . _ - space)'
+        try:
+            if shutil.disk_usage(Path(self.config.get('imports_dir', '/opt/minecraft-lan-installer/imports'))).free \
+                    < length + UPLOAD_MARGIN:
+                return 507, 'not enough free space on the Pi (4 GiB margin)'
+        except OSError:
+            return 500, 'the imports folder is not available'
+        if UPLOADING.locked():
+            return 409, 'another upload is in progress'
+        return None
+
+    def upload(self, headers, stream, ip):
+        """POST /upload: el cuerpo es el archivo; nombre en X-Filename (URL-encoded). Se valida todo
+        ANTES de leer el cuerpo y se escribe por bloques en imports/ con un nombre temporal."""
+        if headers.get('Host') not in (f"{self.config['bind']}:{self.config['port']}", self.config['bind']):
+            return 421, {}, b'Host not allowed'
+        session = self.session(headers)
+        if not session:
+            return self.json({'error': 'sign-in required'}, 401)
+        if not hmac.compare_digest(headers.get('X-CSRF-Token', ''), session['csrf']) or not self.origin_ok(headers):
+            return self.json({'error': 'request rejected'}, 403)
+        declared = headers.get('Content-Length', '')
+        if headers.get('Transfer-Encoding') or not re.fullmatch(r'[0-9]{1,11}', declared):
+            return self.json({'error': 'a Content-Length is required'}, 411)
+        length = int(declared)
+        name = urllib.parse.unquote(headers.get('X-Filename', '')).strip()
+        problem = self.upload_problem(name, length)
+        if problem:
+            return self.json({'error': problem[1]}, problem[0])
+        folder = Path(self.config.get('imports_dir', '/opt/minecraft-lan-installer/imports'))
+        if not UPLOADING.acquire(blocking=False):
+            return self.json({'error': 'another upload is in progress'}, 409)
+        temporary = folder / f'.upload-{secrets.token_hex(8)}.part'
+        try:
+            remaining = length
+            with open(temporary, 'xb') as out:
+                os.chmod(temporary, 0o640)
+                first = True
+                while remaining:
+                    chunk = stream.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ConnectionError('upload interrupted')
+                    if first and not chunk.startswith(ZIP_MAGIC):
+                        return self.json({'error': 'the file is not a zip / .mcworld archive'}, 400)
+                    first = False
+                    out.write(chunk)
+                    remaining -= len(chunk)
+            target, counter = folder / name, 2
+            while target.exists():
+                stem, dot, suffix = name.rpartition('.')
+                target, counter = folder / f'{stem}-{counter}.{suffix}', counter + 1
+            os.rename(temporary, target)
+            return self.json({'ok': True, 'name': target.name, 'size': length})
+        except (OSError, ConnectionError) as exc:
+            return self.json({'error': f'upload failed ({type(exc).__name__})'}, 400)
+        finally:
+            temporary.unlink(missing_ok=True)
+            UPLOADING.release()
+
     def api(self, method, path, headers, body, session, query):
         """JSON para app.js. Los POST exigen el token CSRF en cabecera y el mismo Origin."""
         if method == 'POST':
@@ -246,6 +318,10 @@ class App:
             if path == '/api/console' and isinstance(payload, dict) and isinstance(payload.get('command'), str):
                 return self.json(self.helper(['console', payload['command']], timeout=30))
             return self.json({'error': 'not found'}, 404)
+        if path == '/api/upload-check':
+            size = query.get('size', ['0'])[0]
+            problem = self.upload_problem(query.get('name', [''])[0], int(size) if size.isdigit() else 0)
+            return self.json({'ok': True} if not problem else {'ok': False, 'error': problem[1]})
         if path == '/api/pulse':
             return self.json(self.helper(['pulse'], timeout=30))
         if path == '/api/console':
@@ -498,6 +574,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
     timeout = 30
 
     def respond(self, method):
+        if method == 'POST' and urlsplit(self.path).path == '/upload':
+            # La subida se valida antes de leer el cuerpo y se escribe por bloques.
+            status, headers, payload = self.server.app.upload(self.headers, self.rfile, self.client_address[0])
+            self.send_response(status)
+            for key, value in {'Content-Type': 'application/json', 'Cache-Control': 'no-store',
+                               'X-Content-Type-Options': 'nosniff', **headers}.items():
+                self.send_header(key, value)
+            self.send_header('Content-Length', str(len(payload)))
+            if status != 200:
+                self.send_header('Connection', 'close')  # no se lee el resto de un cuerpo rechazado
+                self.close_connection = True
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         declared = self.headers.get('Content-Length', '0')
         if self.headers.get('Transfer-Encoding') or not re.fullmatch(r'[0-9]{1,6}', declared.strip() or '0'):
             self.send_error(400)

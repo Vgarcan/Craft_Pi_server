@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -762,6 +763,60 @@ class PanelAppTests(unittest.TestCase):
                 request = Request(f'http://127.0.0.1:{httpd.server_address[1]}/exports/main-1.zip', headers={'Cookie': cookie})
                 with urlopen(request) as response:
                     self.assertEqual(len(response.read()), 3_000_002)
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+
+    def test_world_upload_streams_to_imports_with_checks(self):
+        import socket
+        cookie, csrf = self.login()
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            self.app.config['imports_dir'] = directory
+            httpd = http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
+            httpd.app = self.app
+            port = httpd.server_address[1]
+            self.app.config.update(bind='127.0.0.1', port=port)
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            def send(body, name='My World.zip', token=csrf, origin=None, session=cookie, length=None):
+                headers = {'X-Filename': urllib.parse.quote(name), 'X-CSRF-Token': token, 'Content-Type': 'application/octet-stream'}
+                if session:
+                    headers['Cookie'] = session
+                if origin:
+                    headers['Origin'] = origin
+                with socket.create_connection(('127.0.0.1', port), timeout=10) as sock:
+                    head = f'POST /upload HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {length if length is not None else len(body)}\r\n'
+                    head += ''.join(f'{k}: {v}\r\n' for k, v in headers.items()) + '\r\n'
+                    sock.sendall(head.encode() + body)
+                    reply = b''
+                    while chunk := sock.recv(65536):
+                        reply += chunk
+                status = int(reply.split(b' ', 2)[1])
+                return status, json.loads(reply.split(b'\r\n\r\n', 1)[1] or b'{}')
+            space = patch.object(server.shutil, 'disk_usage', return_value=Mock(free=100 * 2**30))
+            space.start()
+            self.addCleanup(space.stop)
+            try:
+                payload = b'PK\x03\x04' + b'w' * 3_000_000
+                status, reply = send(payload)
+                self.assertEqual((status, reply['name']), (200, 'My World.zip'))
+                self.assertEqual((folder / 'My World.zip').read_bytes(), payload)
+                self.assertEqual(send(payload)[1]['name'], 'My World-2.zip')
+                small = b'PK\x03\x04 small'  # los rechazos responden sin leer el cuerpo
+                self.assertEqual(send(small, session=None)[0], 401)
+                self.assertEqual(send(small, token='nope')[0], 403)
+                self.assertEqual(send(small, origin='https://evil.example')[0], 403)
+                for name in ('../escape.zip', 'evil.sh', '.hidden.zip', 'a' * 120 + '.zip'):
+                    self.assertEqual(send(small, name=name)[0], 400, name)
+                self.assertEqual(send(b'<html>not a zip</html>', name='fake.zip')[0], 400)
+                self.assertEqual(send(b'', length=server.MAX_UPLOAD + 1)[0], 413)
+                with patch.object(server.shutil, 'disk_usage', return_value=Mock(free=1)):
+                    self.assertEqual(send(small, name='big.zip')[0], 507)
+                check = json.loads(self.request('GET', '/api/upload-check?name=evil.sh&size=10', cookie=cookie, host=f'127.0.0.1:{port}')[2])
+                self.assertFalse(check['ok'])
+                check = json.loads(self.request('GET', '/api/upload-check?name=ok.mcworld&size=10', cookie=cookie, host=f'127.0.0.1:{port}')[2])
+                self.assertTrue(check['ok'])
+                self.assertEqual(sorted(p.name for p in folder.iterdir()), ['My World-2.zip', 'My World.zip'])
             finally:
                 httpd.shutdown()
                 httpd.server_close()
