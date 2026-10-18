@@ -67,10 +67,19 @@ No había cambios locales sin commit en el repositorio de `/opt`. `server.proper
 | Temperatura y throttling en reposo | 46–48 °C, `throttled=0x0` |
 | Memoria en reposo, sin jugadores | Java ~1,0–1,25 GiB RSS; host con 1,4–1,9 GiB disponibles y 0,2–0,4 GiB de swap en uso (con escritorio) |
 
-### Pendiente de la fase 1 (decisión del operador)
+### Cambios del host aplicados con autorización del operador (18-10-2026)
 
-- Activar el cgroup de memoria (`cgroup_enable=memory` en `/boot/firmware/cmdline.txt`) y reiniciar.
-- Decidir si se mantiene el escritorio. El perfil previsto es OS Lite; el escritorio y sus procesos consumen RAM que el servidor no puede usar.
+| Cambio | Reversión | Estado |
+| --- | --- | --- |
+| `cgroup_enable=memory` añadido a `/boot/firmware/cmdline.txt` | Restaurar `/boot/firmware/cmdline.txt.pre-craftpi-20261018` | Implementado; **pendiente de reinicio y auditoría** |
+| Arranque por defecto `multi-user.target` (sin escritorio) | `sudo systemctl set-default graphical.target` | Implementado; pendiente de reinicio |
+| Whitelist: añadir al jugador Bedrock que intentó entrar | `manage.sh command "whitelist remove NOMBRE"` | Floodgate no encontró su XUID en la caché de GeyserMC; se añade por nombre con el jugador conectado |
+
+Auditoría previa al reinicio (`tools/audit.sh --verify`): dos FALLO esperados (cgroup de memoria y `Memory=0` en el contenedor); el resto OK.
+
+### Pendiente de la fase 1
+
+- Reiniciar, recrear el contenedor una vez para aplicar el límite de 3 GiB y repetir `tools/audit.sh --verify`.
 - Reservar la IP de la Pi en el router (reserva DHCP).
 - Copiar los backups fuera de la microSD.
 
