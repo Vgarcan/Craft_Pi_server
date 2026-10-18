@@ -73,6 +73,12 @@ else
 fi
 rm -f "$tarball"
 
+# Biblioteca de mundos: imports/ la escribe el administrador (por ejemplo arrastrando desde VS Code)
+# y exports/ la lee el panel para ofrecer las descargas (grupo mclan-panel, setgid).
+install -d -m 0775 -o "${SUDO_USER:-root}" -g "${SUDO_USER:-root}" "$PROJECT_DIR/imports"
+install -d -m 2750 -o root -g "$USER_NAME" "$PROJECT_DIR/exports"
+find "$PROJECT_DIR/exports" -maxdepth 1 -type f -exec chgrp "$USER_NAME" {} + -exec chmod 0640 {} +
+
 config="$CONFIG_DIR/panel.json"
 password_record=''
 if [[ ! -f $config || $mode == --reset-password ]]; then
@@ -89,13 +95,14 @@ if [[ ! -f $config || $mode == --reset-password ]]; then
         chown root:root "$CONFIG_DIR/initial-password"
     fi
 fi
-CONFIG="$config" BIND="$LAN_IP" PORT="$PORT" CERT="$cert" KEY="$key" RECORD="$password_record" ASSETS="$assets" python3 -I - <<'EOF'
+CONFIG="$config" BIND="$LAN_IP" PORT="$PORT" CERT="$cert" KEY="$key" RECORD="$password_record" ASSETS="$assets" EXPORTS="$PROJECT_DIR/exports" python3 -I - <<'EOF'
 import json, os
 from pathlib import Path
 path = Path(os.environ['CONFIG'])
 config = json.loads(path.read_text()) if path.exists() else {}
 config.update(bind=os.environ['BIND'], port=int(os.environ['PORT']), cert=os.environ['CERT'], key=os.environ['KEY'],
-              map_url=f"http://{os.environ['BIND']}:8100/", assets_dir=os.environ['ASSETS'])
+              map_url=f"http://{os.environ['BIND']}:8100/", assets_dir=os.environ['ASSETS'],
+              exports_dir=os.environ['EXPORTS'])
 if os.environ['RECORD']:
     config['password'] = json.loads(os.environ['RECORD'])
 temporary = path.with_suffix('.new')

@@ -448,6 +448,64 @@ class Views:
                         'Anyone else who joins meanwhile is kicked when it closes.</p>'
                         '<p><button class="mc-btn">Open and wait</button></p></form>', icon=self.texture('clock_00', '', 'icon')))
 
+    def library(self, lib, session):
+        """Biblioteca de mundos: hasta 50 guardados, uno activo en los puertos de siempre."""
+        cards = ''
+        for w in lib['worlds']:
+            size = f'{w["size"] / 2**20:.0f} MiB' if isinstance(w.get('size'), (int, float)) else '—'
+            source = {'existing': 'Original', 'new': 'Generated', 'import-java': 'Imported (Java)',
+                      'import-bedrock': 'Imported (Bedrock)', 'restored': 'Restored'}.get(w.get('source'), w.get('source') or '')
+            state = (self.pill('ok', 'Active') if w['active'] else
+                     self.pill('', 'Stored') if w['generated'] else self.pill('warn', 'Not generated yet'))
+            actions = ''
+            if not w['active']:
+                actions += self.button('/world', {'do': 'world-activate', 'id': w['id']}, 'Activate', session, 'primary small',
+                                       f'Switch the server to "{w["name"]}"? Players are disconnected for about a minute; '
+                                       'a verified backup is taken first.')
+            if w['generated']:
+                actions += self.button('/world', {'do': 'world-export', 'id': w['id'], 'format': 'java'}, 'Export Java', session, 'small')
+                actions += self.button('/world', {'do': 'world-export', 'id': w['id'], 'format': 'bedrock'}, 'Export Bedrock', session, 'small')
+            if not w['active']:
+                actions += self.button('/world', {'do': 'world-delete', 'id': w['id']}, 'Delete', session, 'danger small',
+                                       f'Delete "{w["name"]}"? It is archived to backups/worlds first.')
+            seed = f' · seed <span class="mono">{e(w["seed"])}</span>' if w.get('seed') else ''
+            relight = ' · light recalculated on first start' if w.get('needs_relight') else ''
+            cards += (f'<article class="world-card{" active" if w["active"] else ""}">'
+                      f'<div class="world-icon">{self.texture("grass_block_side" if w["generated"] else "bedrock", "", "icon")}</div>'
+                      f'<div class="world-info"><h3>{e(w["name"])} {state}</h3>'
+                      f'<p class="muted"><span class="mono">{e(w["id"])}</span> · {e(source)} · {e(size)}{seed}{relight}</p>'
+                      f'<p class="muted">Created {e((w.get("created") or "—")[:10])} · last played {e((w.get("last_active") or "—")[:10])}</p>'
+                      f'<div class="row">{actions}</div></div></article>')
+        imports = ''.join(f'<option value="{e(f["name"])}">{e(f["name"])} ({f["size"] / 2**20:.0f} MiB)</option>' for f in lib['imports'])
+        import_form = (f'<form method="post" action="/world" class="fields">{self.csrf(session)}<input type="hidden" name="do" value="world-import">'
+                       f'<div class="field"><label for="imf">File</label><select id="imf" name="file">{imports}</select></div>'
+                       '<div class="field"><label for="imn">Name in the library</label><input id="imn" type="text" name="name" '
+                       'maxlength="40" required></div><p><button class="mc-btn primary">Import</button></p></form>'
+                       if imports else '<p class="muted">No files to import yet.</p>')
+        exports = [(f'<a class="mc-btn small" href="/exports/{e(f["name"])}" download>Download</a> <span class="mono">{e(f["name"])}</span>',
+                    f'{f["size"] / 2**20:.0f} MiB', time.strftime('%Y-%m-%d %H:%M', time.localtime(f['mtime'])))
+                   for f in lib['exports']]
+        return (
+            self.card(f'World library ({len(lib["worlds"])} / {lib["limit"]})',
+                      '<p class="muted">Only the active world is online, on the usual addresses: players never change '
+                      'server address. Inventories belong to each world; whitelist and operators are shared.</p>'
+                      f'<div class="worlds">{cards}</div>', 'wide', icon=self.texture('bookshelf', '', 'icon'))
+            + '<div class="grid two">'
+            + self.card('Create a world', f'<form method="post" action="/world">{self.csrf(session)}<input type="hidden" name="do" value="world-create">'
+                        '<label for="wn">Name</label><input id="wn" type="text" name="name" maxlength="40" required>'
+                        '<label for="ws">Seed (optional)</label><input id="ws" type="text" name="seed" inputmode="numeric" '
+                        'pattern="-?[0-9]{1,19}" maxlength="20"><p class="muted">It is generated the first time you activate it. '
+                        'Pre-generate it from Console with Chunky to keep the Pi smooth.</p>'
+                        '<p><button class="mc-btn primary">Create</button></p></form>', icon=self.texture('crafting_table_front', '', 'icon'))
+            + self.card('Import a world', '<p class="muted">Copy a Java world (<code>.zip</code>) or a Bedrock world '
+                        '(<code>.mcworld</code>) into <code>/opt/minecraft-lan-installer/imports/</code> on the Pi, for example by '
+                        'dragging it into VS Code. Bedrock worlds are converted with Chunker in an isolated container; '
+                        'mobs and dropped items do not survive the conversion.</p>' + import_form,
+                        icon=self.texture('ender_pearl', '', 'icon'))
+            + '</div>'
+            + self.card('Exports', self.table(('File', 'Size', 'Created'), exports, 'No exports yet'),
+                        icon=self.texture('chest_minecart', '', 'icon')))
+
     def world(self, status, session, map_link):
         bluemap = status.get('bluemap')
         module = '<p class="muted">BlueMap is not part of this release.</p>'

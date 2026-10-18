@@ -241,6 +241,17 @@ class HelperValidationTests(unittest.TestCase):
         panel.player_action('ban', 'Steve')
         self.assertEqual(panel.rcon.call_args.args[:2], ('ban', 'Steve'))
 
+    def test_world_verbs_are_validated(self):
+        self.assertEqual(helper.parse(['world-create', 'My World', '-42'])[1], ['My World', '-42'])
+        self.assertEqual(helper.parse(['world-import', 'Xemitest_world.mcworld', 'Xemi'])[1], ['Xemitest_world.mcworld', 'Xemi'])
+        self.assertEqual(helper.parse(['world-export', 'main', 'bedrock'])[1], ['main', 'bedrock'])
+        for argv in (['world-create', ''], ['world-create', 'x', 'seed'], ['world-activate', '../main'],
+                     ['world-activate', 'Main'], ['world-export', 'main', 'png'], ['world-import', '../../etc/shadow.zip', 'x'],
+                     ['world-import', 'evil.sh', 'x'], ['world-import', 'a/b.zip', 'x'], ['world-rename', 'main', 'a\nb'],
+                     ['world-delete']):
+            with self.subTest(argv=argv), self.assertRaises(ValueError):
+                helper.parse(argv)
+
     def test_floodgate_uuid_from_xuid(self):
         self.assertEqual(helper.floodgate_uuid('2535412345678901'), '00000000-0000-0000-0009-01f1b0392c35')
 
@@ -698,6 +709,62 @@ class PanelAppTests(unittest.TestCase):
         self.assertEqual(self.request('POST', f'/players/{other}', f'csrf={csrf}&do=op', cookie)[0], 400)
         self.assertEqual(self.request('POST', f'/players/{uuid}', f'csrf={csrf}&do=rm', cookie)[0], 400)
         self.assertEqual(self.request('POST', f'/players/{uuid}', 'do=op', cookie)[0], 403)
+
+    def test_world_library_page_and_actions(self):
+        cookie, csrf = self.login()
+        library = {'ok': True, 'active': 'main', 'limit': 50, 'imports': [{'name': 'Xemi.mcworld', 'size': 15 * 2**20, 'mtime': 1}],
+                   'exports': [{'name': 'main-20261018t200000-000000z.zip', 'size': 2**20, 'mtime': 1}],
+                   'worlds': [{'id': 'main', 'active': True, 'name': 'Main <b>', 'source': 'existing', 'created': '2026-10-18',
+                               'last_active': None, 'size': 300 * 2**20, 'generated': True, 'seed': '', 'needs_relight': False},
+                              {'id': 'fresh', 'active': False, 'name': 'Fresh', 'source': 'new', 'created': '2026-10-18',
+                               'last_active': None, 'size': None, 'generated': False, 'seed': '42', 'needs_relight': False}]}
+        def fake(argv, timeout=60):
+            self.calls.append(argv)
+            return {'worlds': library, 'status': status()}.get(argv[0], {'ok': True, 'output': 'done'})
+        self.app.helper = fake
+        page = self.request('GET', '/world', cookie=cookie)[2].decode()
+        for marker in ('World library (2 / 50)', 'Main &lt;b&gt;', 'Not generated yet', 'Xemi.mcworld', '/exports/main-'):
+            self.assertIn(marker, page)
+        self.app.jobs.runner = Mock(return_value={'ok': True, 'output': ''})
+        for body, argv in (('do=world-activate&id=fresh', ['world-activate', 'fresh']),
+                           ('do=world-export&id=main&format=bedrock', ['world-export', 'main', 'bedrock']),
+                           ('do=world-import&file=Xemi.mcworld&name=Xemi', ['world-import', 'Xemi.mcworld', 'Xemi']),
+                           ('do=world-delete&id=fresh', ['world-delete', 'fresh'])):
+            self.app.jobs.runner.reset_mock()
+            location = self.request('POST', '/world', f'csrf={csrf}&{body}', cookie)[1]['Location']
+            self.assertTrue(location.startswith('/job/'), body)
+            for _ in range(50):
+                if self.app.jobs.runner.called:
+                    break
+                time.sleep(0.02)
+            self.assertEqual(self.app.jobs.runner.call_args.args[0], argv)
+        self.request('POST', '/world', f'csrf={csrf}&do=world-create&name=New&seed=7', cookie)
+        self.assertEqual(self.calls[-1], ['world-create', 'New', '7'])
+
+    def test_exports_are_streamed_and_names_are_restricted(self):
+        cookie, _ = self.login()
+        with tempfile.TemporaryDirectory() as directory:
+            self.app.config['exports_dir'] = directory
+            (Path(directory) / 'main-1.zip').write_bytes(b'PK' + b'x' * 3_000_000)
+            (Path(directory) / 'secret.zip').symlink_to('/etc/hostname')
+            code, headers, payload = self.request('GET', '/exports/main-1.zip', cookie=cookie)
+            self.assertEqual((code, headers['Content-Disposition']), (200, 'attachment; filename="main-1.zip"'))
+            self.assertIsInstance(payload, Path)
+            self.assertEqual(self.request('GET', '/exports/secret.zip', cookie=cookie)[0], 404)
+            for name in ('../panel.json', 'MAIN.zip', 'main-1.tar.gz', 'a/b.zip'):
+                self.assertNotEqual(self.request('GET', f'/exports/{name}', cookie=cookie)[0], 200, name)
+            self.assertEqual(self.request('GET', '/exports/main-1.zip')[0], 303)  # sin sesión
+            httpd = http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
+            httpd.app = self.app
+            self.app.config.update(bind='127.0.0.1', port=httpd.server_address[1])
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            try:
+                request = Request(f'http://127.0.0.1:{httpd.server_address[1]}/exports/main-1.zip', headers={'Cookie': cookie})
+                with urlopen(request) as response:
+                    self.assertEqual(len(response.read()), 3_000_002)
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
 
     def test_logout_ends_session(self):
         cookie, csrf = self.login()

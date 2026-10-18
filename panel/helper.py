@@ -139,6 +139,17 @@ BLOCKED_COMMANDS = {'stop', 'restart', 'reload'}
 NOISE = ('Thread RCON Client',)
 
 
+WORLD_ID = re.compile(r'[a-z0-9][a-z0-9-]{0,31}')
+IMPORT_FILE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._ -]{0,99}\.(?:zip|mcworld)')
+
+
+def world_name(value):
+    value = value.strip()
+    if not 1 <= len(value) <= 40 or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError('a world name must be 1 to 40 printable characters')
+    return value
+
+
 def console_command(words):
     """Comando de juego para la consola web: una línea imprimible; nunca stop/restart/reload."""
     text = ' '.join(words).strip().lstrip('/')
@@ -603,6 +614,27 @@ class Panel:
     def plugin(self, name, value):
         return self.manage('plugin', name, value)
 
+    def worlds(self):
+        from mclan.worlds import Library
+        library = Library(self.runtime).describe()
+        def listing(folder, pattern):
+            if not folder.is_dir():
+                return []
+            return [{'name': p.name, 'size': p.stat().st_size, 'mtime': p.stat().st_mtime}
+                    for p in sorted(folder.iterdir(), key=lambda p: -p.stat().st_mtime)
+                    if p.is_file() and not p.is_symlink() and pattern.fullmatch(p.name)][:50]
+        return {**library, 'imports': listing(self.root / 'imports', IMPORT_FILE),
+                'exports': listing(self.root / 'exports', re.compile(r'[a-z0-9-]+\.(?:zip|mcworld)'))}
+
+    def world_create(self, name, seed=''):
+        from mclan.worlds import Library
+        return {'ok': True, 'output': f'Created world {Library(self.runtime).create(name, seed)}.'}
+
+    def world_rename(self, wid, name):
+        from mclan.worlds import Library
+        Library(self.runtime).rename(wid, name)
+        return {'ok': True, 'output': 'World renamed.'}
+
     def audit(self):
         result = subprocess.run([str(self.root / 'tools/audit.sh')], capture_output=True, text=True,
                                 timeout=120, check=False, stdin=subprocess.DEVNULL)
@@ -655,6 +687,36 @@ def parse(argv):
     if verb == 'players':
         expect(0)
         return verb, [], False
+    if verb == 'worlds':
+        expect(0)
+        return verb, [], False
+    if verb == 'world-create':
+        if len(args) not in (1, 2):
+            raise ValueError('world-create needs a name and optionally a seed')
+        seed = args[1] if len(args) == 2 else ''
+        if seed and not re.fullmatch(r'-?[0-9]{1,19}', seed):
+            raise ValueError('the seed must be a whole number')
+        return verb, [world_name(args[0]), seed], True
+    if verb == 'world-rename':
+        expect(2)
+        if not WORLD_ID.fullmatch(args[0]):
+            raise ValueError('invalid world id')
+        return verb, [args[0], world_name(args[1])], True
+    if verb in ('world-activate', 'world-delete'):
+        expect(1)
+        if not WORLD_ID.fullmatch(args[0]):
+            raise ValueError('invalid world id')
+        return verb, args, False  # manage.sh toma el bloqueo
+    if verb == 'world-export':
+        expect(2)
+        if not WORLD_ID.fullmatch(args[0]):
+            raise ValueError('invalid world id')
+        return verb, [args[0], choice('java', 'bedrock')(args[1])], False
+    if verb == 'world-import':
+        expect(2)
+        if not IMPORT_FILE.fullmatch(args[0]):
+            raise ValueError('invalid import file name')
+        return verb, [args[0], world_name(args[1])], False
     if verb == 'player':
         expect(1)
         if not UUID.fullmatch(args[0]):
@@ -691,6 +753,23 @@ def execute(panel, verb, args):
         return panel.console(*args)
     if verb == 'players':
         return {'ok': True, **panel.players()}
+    if verb == 'worlds':
+        return {'ok': True, **panel.worlds()}
+    if verb == 'world-create':
+        return panel.world_create(*args)
+    if verb == 'world-rename':
+        return panel.world_rename(*args)
+    if verb == 'world-activate':
+        return panel.manage('world', 'activate', args[0], '--yes')
+    if verb == 'world-delete':
+        return panel.manage('world', 'delete', args[0], '--yes')
+    if verb == 'world-export':
+        return panel.manage('world', 'export', args[0], '--format', args[1])
+    if verb == 'world-import':
+        source = panel.root / 'imports' / args[0]
+        if source.is_symlink() or not source.is_file():
+            return {'ok': False, 'output': 'That file is not in the imports folder.'}
+        return panel.manage('world', 'import', str(source), args[1])
     if verb == 'player':
         return panel.player(*args)
     if verb == 'player-action':

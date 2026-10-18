@@ -119,7 +119,8 @@ def settings(root):
 
 def guard_paths(root):
     # Evita seguir rutas gestionadas que un usuario haya sustituido por enlaces.
-    for name in ('state', 'data', 'logs', 'backups', 'releases', 'config', '.env', 'compose.yaml'):
+    for name in ('state', 'data', 'logs', 'backups', 'releases', 'config', '.env', 'compose.yaml',
+                 'worlds', 'imports', 'exports'):
         path = root / name
         if path.is_symlink():
             raise Error(f'No se admiten enlaces en rutas gestionadas: {name}')

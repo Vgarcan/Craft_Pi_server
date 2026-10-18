@@ -299,6 +299,17 @@ ul.advancements .icon { width: 22px; height: 22px; }
 .gamemode { margin: 14px 0; } .gamemode label { margin: 0; } .gamemode select { width: auto; }
 .panel.wide { overflow: visible; }
 
+/* --- World library ------------------------------------------------------------------ */
+.worlds { display: grid; gap: 12px; }
+.world-card { display: flex; gap: 14px; padding: 12px 14px; background: var(--gui-slot); color: #fff;
+  box-shadow: inset 3px 3px 0 #373737, inset -3px -3px 0 #fff; }
+.world-card.active { background: #4f7f3a; box-shadow: inset 3px 3px 0 #2b4a1e, inset -3px -3px 0 #a7e08a, 0 0 0 3px var(--mc-green); }
+.world-card h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 4px; color: #fff; text-shadow: 2px 2px 0 #333; }
+.world-card .muted { color: #ececec; margin: 2px 0; }
+.world-card .row { margin-top: 8px; }
+.world-icon .icon { width: 48px; height: 48px; }
+.world-info { flex: 1; min-width: 0; }
+
 /* --- Login page ------------------------------------------------------------------------- */
 .login .top { justify-content: center; padding-top: 10vh; }
 .login .brand { align-items: center; }

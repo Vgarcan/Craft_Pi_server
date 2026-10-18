@@ -18,6 +18,7 @@ import re
 import secrets
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -215,6 +216,8 @@ class App:
             return 303, {'Location': self.map_link()}, b''
         if method == 'GET' and (match := re.fullmatch(r'/(?:job|tarea)/([0-9a-f]{12})', path)):
             return self.job_page(session, match[1])
+        if method == 'GET' and (match := re.fullmatch(r'/exports/([a-z0-9-]{1,120}\.(?:zip|mcworld))', path)):
+            return self.download(match[1])
         if match := re.fullmatch(r'/players/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', path):
             return (self.profile_page if method == 'GET' else self.profile_post)(session, form, match[1])
         routes = {
@@ -290,6 +293,19 @@ class App:
                 if value is session:
                     del self.sessions[token]
         return 303, {'Location': '/login', 'Set-Cookie': f'{COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0'}, b''
+
+    def download(self, name):
+        """Exportación como descarga en streaming (puede ocupar cientos de MiB)."""
+        folder = Path(self.config.get('exports_dir', '/opt/minecraft-lan-installer/exports'))
+        path = folder / name
+        try:
+            info = os.lstat(path)
+        except OSError:
+            return 404, {'Content-Type': 'text/plain'}, b'Not found'
+        if not stat.S_ISREG(info.st_mode):
+            return 404, {'Content-Type': 'text/plain'}, b'Not found'
+        return 200, {'Content-Type': 'application/octet-stream',
+                     'Content-Disposition': f'attachment; filename="{name}"'}, path
 
     def status_or_error(self, session, title, active, slug):
         status = self.helper(['status'])
@@ -393,8 +409,11 @@ class App:
         status, error = self.status_or_error(session, 'World', '/world', 'world')
         if error:
             return error
-        return self.render('World', self.views.world(status, session, self.map_link(status.get('spawn'))),
-                           session, '/world', slug='world')
+        lib = self.helper(['worlds'])
+        body = ((self.views.library(lib, session) if lib.get('ok') and isinstance(lib.get('worlds'), list) else
+                 f'<div class="alert bad">World library unavailable: {html.escape(str(lib.get("output", "")))}</div>')
+                + self.views.world(status, session, self.map_link(status.get('spawn'))))
+        return self.render('World', body, session, '/world', slug='world')
 
     def world_post(self, session, form, query):
         action, value = form.get('do'), form.get('value')
@@ -404,6 +423,18 @@ class App:
             return 303, {'Location': '/world'}, b''
         if action == 'plugin' and value in ('on', 'off'):
             return self.run_job(session, 'Enable map' if value == 'on' else 'Disable map', ['plugin', 'bluemap', value], '/world')
+        wid = form.get('id', '')
+        if action == 'world-create':
+            self.result_flash(session, self.helper(['world-create', form.get('name', ''), form.get('seed', '').strip()]), '')
+            return 303, {'Location': '/world'}, b''
+        if action == 'world-activate':
+            return self.run_job(session, 'Switch world', ['world-activate', wid], '/world')
+        if action == 'world-delete':
+            return self.run_job(session, 'Delete world', ['world-delete', wid], '/world')
+        if action == 'world-export' and form.get('format') in ('java', 'bedrock'):
+            return self.run_job(session, f'Export world ({form["format"]})', ['world-export', wid, form['format']], '/world')
+        if action == 'world-import':
+            return self.run_job(session, 'Import world', ['world-import', form.get('file', ''), form.get('name', '')], '/world')
         if action == 'settings':
             status = self.helper(['status'])
             if not status.get('ok'):
@@ -488,6 +519,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     'Referrer-Policy': 'same-origin'}
         for key, value in {**defaults, **headers}.items():
             self.send_header(key, value)
+        if isinstance(payload, Path):  # descarga: se envía por bloques, sin cargarla en memoria
+            with payload.open('rb') as stream:
+                self.send_header('Content-Length', str(os.fstat(stream.fileno()).st_size))
+                self.end_headers()
+                while chunk := stream.read(1024 * 1024):
+                    self.wfile.write(chunk)
+            return
         self.send_header('Content-Length', str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
