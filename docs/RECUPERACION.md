@@ -55,13 +55,13 @@ Si todavía queda el proceso anterior vivo, no pueden ejecutarse dos operaciones
 
 Después de un OOM, una salida forzada o un corte eléctrico, los archivos existentes no equivalen a un snapshot consistente. Una restauración confirmada puede conservarlos como datos de recuperación y volver a una copia anterior verificada.
 
-Si `stop` no encuentra el mensaje de guardado esperado, no presenta el siguiente backup como consistente. Verifica si Paper cambió su formato de log o si realmente falló el guardado. El validador admite salida JVM 143 sólo cuando hay evidencia de guardado completo y no hubo OOM.
+Si `stop` no encuentra la evidencia de guardado esperada (mensaje vanilla o secuencia Moonrise; ver README, sección 8), no presenta el siguiente backup como consistente. Verifica si Paper cambió su formato de log o si realmente falló el guardado. El validador admite salida JVM 143 sólo cuando hay evidencia de guardado completo y no hubo OOM.
 
 Tras un corte eléctrico, el procedimiento no puede garantizar la integridad física de la microSD ni reparar por sí mismo todos los formatos de región. Conserva los archivos originales antes de intentar reparaciones externas.
 
 ## 5. Pérdida de la microSD
 
-Necesitas una copia guardada **fuera** de la tarjeta perdida y el proyecto de la misma versión.
+Necesitas una copia guardada **fuera** de la tarjeta perdida y el proyecto en la misma versión o en una posterior. Desde la 0.2.0, `restore` acepta backups de plantillas gestionadas anteriores y construye la imagen del proyecto actual.
 
 1. Reinstala el OS siguiendo la guía desde cero.
 2. Transfiere el proyecto y el backup con su `.sha256`.

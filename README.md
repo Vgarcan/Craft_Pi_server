@@ -21,12 +21,13 @@ Instalador y administrador de **Paper + GeyserMC + Floodgate**, dentro de Docker
 
 ## 1. Alcance y estado de verificación
 
-El código, las pruebas, la configuración Docker y las guías se entregan juntos. **No se ha instalado ni ejecutado Minecraft en una Raspberry Pi física durante la preparación de este proyecto.** Consulta el detalle de comprobaciones realizadas en [VALIDACION.md](docs/VALIDACION.md).
+El código, las pruebas, la configuración Docker y las guías se entregan juntos. La versión 0.1.0 se preparó sin hardware; desde la **0.2.0** el proyecto se ha instalado y ensayado en una Raspberry Pi 5 de 4 GB. El estado por fases, con la distinción entre **implementado** y **verificado en hardware**, está en [ESTADO.md](docs/ESTADO.md). El detalle de cada comprobación está en [VALIDACION.md](docs/VALIDACION.md).
 
 El instalador sólo muestra una verificación local correcta después de comprobar:
 
 - Estado estable y `healthy` del contenedor.
 - Respuesta **Java Server List Ping** mediante TCP y **RakNet Unconnected Pong** mediante UDP.
+- Que Geyser confirma en ese arranque el **signaling NetherNet** integrado y que su puerto TCP publicado acepta conexiones.
 - Que Geyser y Floodgate están habilitados, mediante un diagnóstico **offline** generado por la instancia de Geyser cargada.
 - Que el protocolo Java real de Paper coincide con el soportado por esa build de Geyser.
 - Que Geyser utiliza autenticación Floodgate y Java mantiene `online-mode=true`.
@@ -137,14 +138,15 @@ Un único contenedor ejecuta **Paper**. **Geyser-Spigot** y **Floodgate-Spigot**
 | Tráfico o dato | Recorrido |
 | --- | --- |
 | Cliente Java | IP LAN de la Pi, TCP 25565 → Paper |
-| Cliente Bedrock | IP LAN de la Pi, UDP 19132 → Geyser → Paper, autenticado por Floodgate |
+| Cliente Bedrock hasta 26.5x (RakNet) | IP LAN de la Pi, UDP 19132 → Geyser → Paper, autenticado por Floodgate |
+| Cliente Bedrock 26.60+ (NetherNet) | Signaling HTTP en TCP 19132, juego WebRTC en UDP 19133 → Geyser → Paper |
 | Administración | `manage.sh` → Docker Compose; RCON sólo dentro del contenedor |
 | Mundos y jugadores | `data/` del host → `/data` del contenedor |
 | Binarios fijados | `releases/<id>/` del host → `/opt/release` en sólo lectura |
 | Logs de operaciones | `logs/operations.log`, con rotación |
 | Logs del servidor | Docker con rotación y registros propios de Paper en `data/logs/` |
 
-Los dos puertos del juego son los únicos publicados. **RCON 25575 no se publica en el host.** No se monta el socket Docker en el contenedor.
+Sólo se publican los puertos del juego: TCP 25565, UDP 19132, TCP 19132 y UDP 19133. **RCON 25575 no se publica en el host.** No se monta el socket Docker en el contenedor.
 
 ```text
 minecraft-lan-installer/
@@ -155,6 +157,7 @@ minecraft-lan-installer/
     compose.template.yaml          Plantilla versionada
     entrypoint.sh                  Arranque y sustitución de los dos plugins gestionados
     probe.py                       Java Status, RakNet y RCON
+  docs/ESTADO.md                   Estado por fases: implementado frente a verificado
   scripts/
     main.py                        Entrada Python común
     mclan/                         Host, versiones, runtime, backups, CLI y utilidades
@@ -201,7 +204,14 @@ Algunas consolas restringen la introducción de servidores personalizados. Por t
 
 No se garantiza la detección automática en la pestaña LAN: Docker usa una red bridge. Introduce la dirección manualmente. Java y Bedrock necesitan estar en la misma red con comunicación entre clientes habilitada; una Wi-Fi de invitados puede aislarlos.
 
-El perfil usa RakNet sobre UDP 19132. Si una futura versión Bedrock elimina ese transporte, requerirá revisar el proyecto; no se habilitan silenciosamente otros puertos o servicios de señalización.
+**NetherNet.** Bedrock deja RakNet a partir de la versión 26.60, anunciada por GeyserMC para el 27 de octubre de 2026. Desde la 0.2.0 Geyser funciona con `transport: both`: RakNet sigue en UDP 19132 para los clientes actuales, y NetherNet usa signaling HTTP en TCP 19132 y WebRTC en UDP 19133. Los jugadores siguen introduciendo la misma dirección y el puerto `19132`.
+
+- Los valores se fijan en `compose.yaml` mediante las propiedades JVM `geyserTransport`, `geyserWebrtcPort` y `geyserAdvertiseAddresses`, que **prevalecen** sobre `plugins/Geyser-Spigot/config.yml`. La dirección anunciada es la IP LAN fijada; `rebind` la actualiza.
+- La identidad del servidor NetherNet se guarda en `data/plugins/Geyser-Spigot/nethernet/` y forma parte de los backups. Si se pierde, cada jugador debe volver a confirmar el servidor.
+- El signaling integrado usa HTTP sin TLS. Según GeyserMC, quien conecta por IP verá una confirmación de confianza la primera vez (*trust on first use*). No se instala certificado ni proxy en este alcance.
+- **Pendiente de hardware:** el transporte NetherNet sólo podrá probarse con un cliente 26.60 real y con una build de Geyser que soporte esa versión. Ejecuta `manage.sh update --plan` cuando se publique.
+
+Geyser necesita acceso a Internet al arrancar para obtener datos de autenticación de Microsoft/Mojang. Sin red, Paper arranca pero Geyser se desactiva y Bedrock no conecta.
 
 ## 7. Administración
 
@@ -236,7 +246,7 @@ sudo ./manage.sh restore backups/minecraft-FECHA-manual.tar.gz
 
 `backup` detiene el servidor si estaba en marcha, espera cierre limpio, crea y lee de nuevo el archivo para comprobar **todos los hashes**, y vuelve a iniciar sólo si estaba funcionando. Si estaba parado, permanece parado.
 
-Se exige el mensaje de guardado de todas las dimensiones en los logs de ese arranque. Se acepta salida JVM `0` o `143` con esa evidencia; un OOM, SIGKILL, otro código o falta de evidencia impide presentar una copia como consistente. Si un cambio de Paper modifica ese mensaje, habrá que revisar el comprobador.
+Se exige evidencia de guardado en los logs de ese arranque: el mensaje vanilla `All dimensions are saved` o, en Paper 26.x con Moonrise, la secuencia `Saving worlds` → `Halted I/O scheduler for world` → `All RegionFile I/O tasks to complete`, en ese orden. Paper 26.3 ya no escribe el mensaje vanilla, y la 0.1.0 rechazaba todos los backups por ello. Se acepta salida JVM `0` o `143` con esa evidencia; un OOM, SIGKILL, otro código o falta de evidencia impide presentar una copia como consistente. Si un cambio de Paper modifica estos mensajes, habrá que revisar el comprobador.
 
 El archivo contiene mundos, jugadores, configuración, EULA, datos y claves de plugins, metadatos, Compose, `.env` y los JARs de la release activa. No contiene la imagen Docker completa, todo el historial de releases, las herramientas del sistema ni los registros de operaciones externos a `data/`.
 
@@ -274,7 +284,22 @@ La segunda orden pide escribir **`ACTUALIZAR`**. Descarga y construye antes de p
 
 Si la verificación falla, detiene la nueva instancia y conserva la marca de operación y la ruta del snapshot. No afirma éxito ni intenta abrir un mundo convertido con una versión antigua. Usa `restore` con la copia indicada.
 
-**Actualizar el código del instalador es distinto de actualizar Minecraft.** `manage.sh update` gestiona Paper y los plugins; no descarga cambios de este repositorio. No ejecutes `git pull` sobre una instalación activa sin revisar cambios, conservar una copia del proyecto original y realizar un backup: una restauración exige los archivos Docker que corresponden al snapshot. Hasta disponer de un procedimiento probado de migración entre versiones del instalador, conserva cada versión del proyecto junto a sus copias.
+**Actualizar el código del instalador.** `manage.sh update` no descarga cambios de este repositorio; eso se hace con Git. El procedimiento ensayado en hardware para pasar de la 0.1.0 a la 0.2.0 es:
+
+```bash
+cd /opt/minecraft-lan-installer
+sudo ./manage.sh backup
+sudo git pull --ff-only
+sudo ./manage.sh status          # avisa de archivos Docker/Compose nuevos
+sudo ./manage.sh update --plan   # muestra builds y cambios del proyecto
+sudo ./manage.sh update          # pide ACTUALIZAR
+```
+
+Tras el `git pull`, `start` y `restart` se niegan a arrancar con código Docker o plantilla Compose distintos de los de la instalación activa; `status`, `logs` y `stop` siguen disponibles. `update` detecta ese cambio aunque las builds de Paper y los plugins sean las mismas: reconstruye la imagen, para el servidor, crea el snapshot `pre-update`, sustituye `compose.yaml` y verifica.
+
+`compose.yaml` sólo se sustituye si es idéntico a una plantilla publicada por el proyecto (lista `PREVIOUS_TEMPLATES` en `scripts/mclan/runtime.py`). Si lo editaste a mano, `update` se detiene sin tocarlo.
+
+`restore` admite backups creados con una plantilla gestionada anterior o con otros archivos Docker. Restaura datos y builds fijadas, y activa la plantilla y la imagen del proyecto actual.
 
 No actualiza Raspberry Pi OS ni Docker Engine por medio de `manage.sh`. Una release ya fijada reutiliza su digest de JVM. Para renovar sólo la base Java o revisar un esquema nuevo de Geyser se requiere una modificación explícita y validada del proyecto; no hay actualización de seguridad automática de imágenes fijadas.
 
@@ -284,11 +309,15 @@ No actualiza Raspberry Pi OS ni Docker Engine por medio de `manage.sh`. Una rele
 | --- | --- | --- |
 | JVM `-Xms` | 512 MiB | Evita reservar el heap máximo desde el inicio |
 | JVM `-Xmx` | 2048 MiB | Deja espacio para memoria nativa, Geyser y el OS |
-| Límite total del contenedor | 3 GiB | Incluye JVM, memoria nativa, auxiliares y caché contabilizada |
+| Límite total del contenedor | 3 GiB | Incluye JVM, memoria nativa, auxiliares y caché contabilizada. **Sólo se aplica con el cgroup de memoria activo**; ver más abajo |
 | Swap del contenedor | Sin margen adicional sobre ese límite | Evita utilizar la SD como ampliación ilimitada de memoria |
 | View distance | 6 chunks | Punto de partida moderado para la Pi |
 | Simulation distance | 4 chunks | Reduce trabajo por tick |
 | Max players | 6 | Límite inicial, **no garantía de rendimiento para seis jugadores** |
+
+**Límite de memoria y Raspberry Pi OS.** El kernel de Raspberry Pi OS arranca con `cgroup_disable=memory`. Entonces Docker descarta `mem_limit` y `memswap_limit` (aviso `Your kernel does not support memory limit capabilities`), y el contenedor sólo queda limitado por el heap de Java y la RAM del host. `status` y el preflight lo advierten. Para activarlo, añade `cgroup_enable=memory` al final de la única línea de `/boot/firmware/cmdline.txt`, conserva una copia del archivo original y reinicia. Comprueba después que `/sys/fs/cgroup/cgroup.controllers` incluye `memory`. Es un cambio del host: el instalador no lo aplica por su cuenta.
+
+Con escritorio gráfico (`graphical.target`) quedan menos de 2 GiB disponibles con el servidor en marcha. El perfil previsto es OS Lite.
 
 La configuración es un punto de partida conservador, no un benchmark. Prueba primero con 2–4 jugadores y vigila CPU, temperatura, memoria y generación de chunks. No se han medido TPS ni rendimiento en este equipo. Los mapas o plugins adicionales pueden cambiar mucho el consumo.
 
@@ -304,13 +333,13 @@ Conserva `online-mode=true`, `enforce-secure-profile=false`, `enable-status=true
 
 El instalador crea la configuración Geyser sólo cuando falta y conserva la clave de Floodgate generada por el plugin. El diagnóstico efectivo, no sólo el contenido escrito, confirma el modo de autenticación.
 
-Los dos JARs con nombres `Geyser-Spigot.jar` y `floodgate-spigot.jar` están reservados al instalador. El entrypoint los sincroniza desde la release fijada. No añadas otra copia de estos plugins con otro nombre.
+Los dos JARs con nombres `Geyser-Spigot.jar` y `floodgate-spigot.jar` están reservados al instalador. El entrypoint los sincroniza desde la release fijada en cada arranque: copia a un archivo temporal y renombra, porque la copia queda en modo `0400` y no se podría sobrescribir. No añadas otra copia de estos plugins con otro nombre.
 
 `compose.yaml` es una copia gestionada de `docker/compose.template.yaml`; el validador rechaza divergencias, sin sobrescribirlas. Para un cambio deliberado de memoria, realiza backup, para el servicio, modifica ambos archivos de forma idéntica y conserva esa versión del proyecto con sus backups. `.env` se genera a partir del estado: para cambiar IP usa `rebind`.
 
 ## 11. Red y arranque automático
 
-Se publican TCP 25565 y UDP 19132 **en la IPv4 LAN seleccionada**. No se usa `0.0.0.0` en el host ni se publica IPv6. Dentro del contenedor, Geyser escucha en `0.0.0.0`, que pertenece a su red aislada.
+Se publican TCP 25565, UDP 19132, TCP 19132 y UDP 19133 **en la IPv4 LAN seleccionada**. No se usa `0.0.0.0` en el host ni se publica IPv6. Dentro del contenedor, Geyser escucha en `0.0.0.0`, que pertenece a su red aislada.
 
 El instalador no entra al router, no crea port forwarding, no usa UPnP y no modifica las reglas del firewall del host. **Docker sí gestiona sus reglas de red** para publicar puertos; esto puede interactuar con UFW/firewalld. Una publicación en una IP local no equivale por sí misma a una ACL por subred: equipos de redes enrutadas que ya puedan alcanzar esa IP podrían acceder. Consulta la documentación Docker de firewall si tu red requiere restricciones adicionales.
 
@@ -327,7 +356,11 @@ Un contenedor `unhealthy` no se reinicia sólo por ese estado: esa política act
 | ARM64 rechazado | `uname -m` y `dpkg --print-architecture`; reinstala Lite **64 bits** si el usuario es `armhf` |
 | OS no contemplado | Utiliza una imagen Bookworm/Trixie de Raspberry Pi OS Lite; no fuerces la detección |
 | Varias IP candidatas | `ip -4 addr`; usa `--lan-ip` en la instalación o `rebind` después |
-| Puerto ocupado | `sudo ss -ltnup`; comprueba qué proceso utiliza 25565/TCP o 19132/UDP |
+| Puerto ocupado | `sudo ss -ltnup`; comprueba qué proceso utiliza 25565/TCP, 19132/UDP, 19132/TCP o 19133/UDP |
+| Bucle de reinicio con `cp: cannot create regular file '/data/plugins/Geyser-Spigot.jar': Permission denied` | Fallo de la 0.1.0. Actualiza a la 0.2.0 (`git pull` y `manage.sh update`). Mientras tanto: `stop`, borrar sólo esos dos JAR de `data/plugins/` y `start` |
+| `start` pide ejecutar `update` | Hiciste `git pull` y el proyecto trae código Docker o Compose nuevo; sigue el procedimiento de la sección 9 |
+| Aviso `NetherNet support is NOT enabled` | Instalación 0.1.0; tras actualizar no debe aparecer. `logs` debe mostrar `Built-in signaling started on` |
+| Jugador rechazado con `You are not whitelisted` | `white-list=true` en `server.properties`. Añádelo con `manage.sh command "whitelist add NOMBRE"` (Java) o `"fwhitelist add NOMBRE"` (Bedrock vía Floodgate) |
 | Docker existe pero no responde | `sudo systemctl status docker`; comprueba espacio y contexto local |
 | Paquetes Docker en conflicto | El script no los elimina: revisa qué servicios dependen de ellos antes de resolverlo manualmente |
 | Fallo HTTP, DNS o TLS | Revisa fecha/hora (`timedatectl`), DNS, acceso a las fuentes y proxy; no desactives TLS |
@@ -388,6 +421,7 @@ Fuentes revisadas el **18 de octubre de 2026**. El instalador vuelve a consultar
 - [Docker Engine en Debian](https://docs.docker.com/engine/install/debian/), [Compose](https://docs.docker.com/compose/install/linux/) y [reinicio de contenedores](https://docs.docker.com/engine/containers/start-containers-automatically/).
 - [Docker y filtrado de puertos](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
 - [API de descargas Paper](https://docs.papermc.io/misc/downloads-service/) y [requisitos Java](https://docs.papermc.io/misc/java-install/).
+- [Preparación de GeyserMC para NetherNet](https://geysermc.org/blog/preparing-for-nethernet) y [configuración de Geyser](https://geysermc.org/wiki/geyser/setup/).
 - [Compatibilidad Geyser](https://geysermc.org/wiki/geyser/supported-versions/), [configuración](https://geysermc.org/wiki/geyser/understanding-the-config/) y [Floodgate](https://geysermc.org/wiki/floodgate/).
 - [Código fuente Geyser](https://github.com/GeyserMC/Geyser): configuración, constante de esquema, diagnóstico y comando `dump offline` contrastados con el commit de la build inspeccionada.
 - [Raspberry Pi Imager](https://www.raspberrypi.com/software/) y [EULA Minecraft](https://www.minecraft.net/eula).

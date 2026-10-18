@@ -1,5 +1,7 @@
 # Informe de validación — 18 de octubre de 2026
 
+> **Actualización 0.2.0 (18-10-2026, tarde).** Las secciones 1 a 4 describen la validación sin hardware de la 0.1.0. La sección 6 recoge la primera validación en la Raspberry Pi 5 y la batería automatizada de la 0.2.0. El estado por fases está en [ESTADO.md](ESTADO.md).
+
 ## Índice
 
 1. Resultado y límites
@@ -7,6 +9,7 @@
 3. Contratos y versiones observadas
 4. Cómo reproducir
 5. Aceptación pendiente en la Raspberry Pi
+6. Validación 0.2.0 en la Raspberry Pi 5
 
 ## 1. Resultado y límites
 
@@ -110,19 +113,47 @@ ruff check --select F,E9 scripts docker/probe.py tests
 
 Registra los resultados al ejecutar la guía desde cero:
 
-| Prueba en hardware | Estado inicial | Evidencia a anotar |
+| Prueba en hardware | Estado a 18-10-2026 | Evidencia a anotar |
 | --- | --- | --- |
-| OS Lite 64 bits, modelo, RAM y espacio | Pendiente | Salida del preflight y modelo exacto |
-| Instalación selectiva Docker/Compose/Buildx | Pendiente | Paquetes antes/después y versiones |
-| Construcción y arranque ARM64 | Pendiente | Imagen, release, logs y estado `healthy` |
-| Diagnóstico efectivo de Geyser/Floodgate | Pendiente | Plugins habilitados y coincidencia de protocolo/build |
+| OS Lite 64 bits, modelo, RAM y espacio | **Hecho, con desviación**: Trixie arm64 **con escritorio**, Pi 5 4 GB, 103 GiB libres | Salida del preflight y modelo exacto |
+| Instalación selectiva Docker/Compose/Buildx | Hecho (Engine 29.9.1, Compose 5.6.0) | Paquetes antes/después y versiones |
+| Construcción y arranque ARM64 | **Verificado** | Imagen, release, logs y estado `healthy` |
+| Diagnóstico efectivo de Geyser/Floodgate | **Verificado** en cada `verify` | Plugins habilitados y coincidencia de protocolo/build |
 | Conexión Java desde otro equipo | Pendiente | Versión, inicio de sesión y juego |
-| Conexión Bedrock desde otro dispositivo | Pendiente | Plataforma, versión, cuenta y juego |
+| Conexión Bedrock desde otro dispositivo | Parcial: la conexión llegó a Paper y la whitelist la rechazó | Plataforma, versión, cuenta y juego |
 | Dos clientes en el mismo mundo | Pendiente | Interacción común observada |
-| Persistencia tras stop/start | Pendiente | Bloque, cofre e inventario conservados |
+| Persistencia tras stop/start | Pendiente (el ciclo funciona; falta comprobar bloques e inventario) | Bloque, cofre e inventario conservados |
 | Arranque tras reboot del host | Pendiente | Servicio activo y conectividad posterior |
 | Respeto de parada manual tras reboot | Pendiente | Permanece parado hasta `start` |
-| Backup y restore de prueba | Pendiente | Copia verificada y retorno al estado previo |
+| Backup y restore de prueba | **Backup verificado**; restore ensayado en copia aislada | Copia verificada y retorno al estado previo |
 | Carga inicial de 2–4 jugadores | Pendiente | Memoria, CPU, temperatura y rendimiento percibido |
 
 Sólo después de estas pruebas puede afirmarse que la instalación concreta funciona en tu Raspberry Pi y con tus clientes.
+
+## 6. Validación 0.2.0 en la Raspberry Pi 5
+
+### Batería automatizada
+
+Ejecutada en la propia Pi (Python 3.13.5, arm64):
+
+| Comprobación | Resultado |
+| --- | --- |
+| `./tests/run.sh --strict` | **51 pruebas correctas**; ShellCheck 0.10.0 sin incidencias; Compose real válido |
+| `python3 -m pyflakes scripts docker/probe.py tests` | Sin incidencias (sustituye a Ruff F/E9, no disponible en la Pi) |
+
+Pruebas nuevas en la 0.2.0:
+
+- Secuencia de cierre de Paper/Moonrise aceptada en orden, rechazada incompleta o desordenada, y compatibilidad con el mensaje vanilla.
+- Detección del cgroup de memoria.
+- Verificación NetherNet: exige la línea de signaling en el log del arranque actual y un TCP que acepte conexiones.
+- Validación estricta frente a deriva del proyecto; detección de plantillas anteriores y rechazo de las editadas a mano.
+- `update` con las mismas builds y proyecto nuevo: reconstruye, crea `pre-update` y aplica la plantilla.
+- `update --plan` sin efectos, y ausencia de cambios cuando no hay nada nuevo.
+- `restore` de un backup con plantilla anterior; rechazo de un backup con `compose.yaml` editado a mano, sin tocar el mundo.
+- Compose publica 19132/tcp y 19133/udp en la IP LAN, anuncia `IP:19133` y no publica RCON.
+
+### Hardware
+
+Detalle, fallos encontrados y copias preservadas: [ESTADO.md](ESTADO.md), fases 1 y 3.
+
+Ninguna prueba automatizada ejecuta el `entrypoint.sh` real, porque exige UID 10000. Su corrección se verificó en hardware con dos `restart` consecutivos y con un `backup` que rearranca el servidor.
