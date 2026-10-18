@@ -2,7 +2,10 @@ package dev.mclan.skins;
 
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.geysermc.floodgate.api.FloodgateApi;
 import org.geysermc.floodgate.api.event.skin.SkinApplyEvent;
@@ -69,6 +72,7 @@ public final class MclanSkins extends JavaPlugin {
             return;
         }
         BedrockClientData data = session.getClientData();
+        describe(connection.bedrockUsername(), data);
         byte[] skin = data.getSkinData();
         // Geyser ya guarda las que caben en su límite; las enormes se descartan.
         if (skin == null || skin.length > MAX_SKIN || (skin.length <= GEYSER_LIMIT && !data.isPersonaSkin())) {
@@ -84,6 +88,47 @@ public final class MclanSkins extends JavaPlugin {
         } catch (ReflectiveOperationException | RuntimeException e) {
             getLogger().warning("Could not keep the Bedrock skin of " + connection.bedrockUsername() + ": " + e);
         }
+    }
+
+    /** Resumen de la skin tal como la envía el cliente (sólo campos de skin, nada del dispositivo). */
+    private void describe(String player, BedrockClientData data) {
+        String summary = "Skin of " + player + ": " + data.getSkinImageWidth() + "x" + data.getSkinImageHeight()
+                + ", persona=" + data.isPersonaSkin() + ", premium=" + data.isPremiumSkin()
+                + ", arm=" + data.getArmSize() + ", patch=" + text(data.getGeometryName(), 160)
+                + ", geometry=" + (data.getGeometryData() == null ? 0 : data.getGeometryData().length) + " B";
+        try {
+            String jwt = data.getOriginalString();
+            String[] parts = jwt == null ? new String[0] : jwt.split("\\.");
+            if (parts.length == 3) {
+                // Recuento aproximado sin Gson (no está en el classpath de compilación): basta para diagnosticar.
+                String claims = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
+                summary += ", animatedImages=" + count(claims, "\"AnimationExpression\"")
+                        + ", personaPieces=" + count(claims, "\"PieceId\"")
+                        + ", pieceTints=" + count(claims, "\"Colors\"")
+                        + ", animationData=" + text(string(claims, "SkinAnimationData"), 80)
+                        + ", geometryEngine=" + text(string(claims, "SkinGeometryDataEngineVersion"), 40);
+            }
+        } catch (RuntimeException e) {
+            summary += ", client data unreadable (" + e + ")";
+        }
+        getLogger().info(summary);
+    }
+
+    private static int count(String json, String token) {
+        return json.split(Pattern.quote(token), -1).length - 1;
+    }
+
+    private static byte[] string(String json, String key) {
+        Matcher match = Pattern.compile("\"" + key + "\"\\s*:\\s*\"([^\"]*)\"").matcher(json);
+        return match.find() ? match.group(1).getBytes(StandardCharsets.UTF_8) : null;
+    }
+
+    private static String text(byte[] bytes, int limit) {
+        if (bytes == null || bytes.length == 0) {
+            return "-";
+        }
+        String value = new String(bytes, StandardCharsets.UTF_8).replaceAll("\\s+", "");
+        return value.length() > limit ? value.substring(0, limit) + "…" : value;
     }
 
     private void originalForBedrock(SessionSkinApplyEvent event) {
