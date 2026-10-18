@@ -361,7 +361,8 @@ class App:
                 f'<div class="card"><h2>Acciones</h2><p class="muted">Parar o reiniciar desconecta a los jugadores. '
                 f'Backup para el servidor un minuto y lo vuelve a arrancar.</p><div class="row">{actions}</div></div>'
                 f'<div class="card"><h2>Versiones</h2><p class="muted">Paper {e(release["paper"])} · Geyser {e(release["geyser"])} · '
-                f'Floodgate {e(release["floodgate"])} · BlueMap {e(release["bluemap"] or "no instalado")} · release {e(release["id"])}</p></div>'
+                f'Floodgate {e(release["floodgate"])} · BlueMap {e(release["bluemap"] or "no instalado")} · '
+                f'Chunky {e(release.get("chunky") or "no instalado")} · release {e(release["id"])}</p></div>'
                 f'<div class="card"><h2>Últimos backups</h2><div class="scroll"><table>{backups}</table></div>'
                 f'<p class="muted">Están en la misma microSD: copia periódicamente alguno fuera de la Pi.</p></div>')
         return 200, {}, self.page('Estado', body, session, '/').encode()

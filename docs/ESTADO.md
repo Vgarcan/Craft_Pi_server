@@ -103,7 +103,7 @@ Nada de esta fase puede verificarse sin clientes. Anota versión, plataforma, re
 | Prueba | Estado | Evidencia a registrar |
 | --- | --- | --- |
 | Java 26.3 entra y juega | Pendiente | Versión del launcher, cuenta Java con licencia |
-| Bedrock 26.30–26.52 entra y juega (RakNet) | Pendiente. Hubo una conexión real desde la LAN, rechazada por whitelist: la red y la autenticación Bedrock llegaron a Paper | Plataforma, versión, `fwhitelist add` |
+| Bedrock 26.30–26.52 entra y juega (RakNet) | **Verificado (18-10-2026)**: el jugador Bedrock se añadió con la apertura temporal del panel (su gamertag no estaba en la caché de GeyserMC), entró en el spawn y aparece en vivo en BlueMap. Identidad Floodgate `00000000-0000-0000-0009-…` | Plataforma, versión, `fwhitelist add` |
 | Java y Bedrock en el mismo mundo a la vez | Pendiente | Se ven, interactúan y editan los mismos bloques |
 | Inventarios separados Java/Bedrock | Esperado por diseño: Floodgate crea otra identidad (prefijo `.`) | Confirmar que no se mezclan |
 | Persistencia tras `restart` | Pendiente | Bloque colocado, cofre e inventario conservados |
@@ -219,3 +219,13 @@ Migración tratada aparte, sobre copias, como se pidió al inicio del proyecto.
 **Pendiente:** el inventario del jugador Bedrock (6 objetos y su posición) quedó con UUID `00000000-0000-0000-0000-000000000000`. Se asignará a su UUID de Floodgate cuando entre por primera vez, con el servidor parado.
 
 Lección para BlueMap: tras cambiar el mundo hay que borrar `data/bluemap/web/maps` y forzar `bluemap force-update` en cada mapa; si no, BlueMap considera los mapas al día.
+
+## Pregeneración y borde del mundo (18-10-2026)
+
+Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa tirones, y el mapa quedaba incompleto.
+
+- **Chunky 1.5.3** como plugin gestionado: resuelto en Hangar y fijado por SHA-256 en la release (`update` con backup `pre-update` verificado). En reposo no consume CPU.
+- **Zona:** cuadrado centrado en (1024, 0) con radio 1600, es decir, de x −576 a 2624 y de z −1600 a 1600. Cubre toda la zona explorada del mundo importado (regiones x −1…4, z −3…2).
+- **Borde del mundo:** `worldborder center 1024 0` y `worldborder set 3200`. La Pi no genera terreno fuera de la zona pregenerada. Para ampliar, pregenera un radio mayor con Chunky y sube el borde.
+- **BlueMap:** ajuste único `craft-pi: tuning-1` con dos hilos de render y web con 250 bloques de detalle y 4000 de vista lejana. El navegador guarda la configuración en cookies: si sigue con los valores anteriores, usa *Settings → Reset* en el menú de BlueMap.
+- Duración y temperaturas: ver la tabla siguiente, que se completa al terminar.

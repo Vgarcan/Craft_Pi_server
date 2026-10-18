@@ -363,6 +363,7 @@ class Panel:
             | {'paper': active['paper']['build'], 'geyser': active['geyser']['version'],
                'floodgate': active['floodgate']['version'],
                'bluemap': active.get('bluemap', {}).get('version'),
+               'chunky': active.get('chunky', {}).get('version'),
                'bedrock': active['compatibility']['bedrock']},
             'container': {'exists': bool(info), 'running': running, 'status': state.get('Status'),
                           'health': state.get('Health', {}).get('Status'),
