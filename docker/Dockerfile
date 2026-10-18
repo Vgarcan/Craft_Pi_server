@@ -8,6 +8,7 @@ RUN apt-get update \
     && groupadd --gid 10000 minecraft \
     && useradd --uid 10000 --gid minecraft --no-create-home minecraft
 COPY --chmod=0555 entrypoint.sh /opt/mclan/entrypoint.sh
+COPY --chmod=0555 bluemap-setup.sh /opt/mclan/bluemap-setup.sh
 COPY --chmod=0444 probe.py /opt/mclan/probe.py
 WORKDIR /data
 USER 10000:10000

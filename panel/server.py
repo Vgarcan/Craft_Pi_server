@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import socket
 import ssl
 import subprocess
 import sys
@@ -195,6 +196,9 @@ class App:
 
     # --- Rutas ---------------------------------------------------------------------------
     def handle(self, method, target, headers, body, ip):
+        # Contra DNS rebinding: sólo se atiende el nombre con el que se publica el panel.
+        if headers.get('Host') not in (f"{self.config['bind']}:{self.config['port']}", self.config['bind']):
+            return 421, {}, b'Host no admitido'
         path = urlsplit(target).path
         query = parse_qs(urlsplit(target).query)
         form = {k: v[0] for k, v in parse_qs(body.decode('utf-8', 'replace'), keep_blank_values=True).items()} if body else {}
@@ -206,7 +210,7 @@ class App:
         if method == 'POST' and (not hmac.compare_digest(form.get('csrf', ''), session['csrf']) or not self.origin_ok(headers)):
             return 403, {}, self.page('Petición rechazada', '<p>Recarga la página e inténtalo de nuevo.</p>', session).encode()
         routes = {
-            ('GET', '/'): self.dashboard, ('POST', '/accion'): self.action,
+            ('GET', '/'): self.dashboard, ('POST', '/accion'): self.action, ('POST', '/modulos'): self.modules_post,
             ('GET', '/whitelist'): self.whitelist_page, ('POST', '/whitelist'): self.whitelist_post,
             ('GET', '/ajustes'): self.settings_page, ('POST', '/ajustes'): self.settings_post,
             ('GET', '/logs'): self.logs_page, ('GET', '/auditoria'): self.audit_page,
@@ -214,7 +218,7 @@ class App:
             ('POST', '/logout'): self.logout,
         }
         if method == 'GET' and path == '/mapa':
-            return 303, {'Location': self.config['map_url']}, b''
+            return 303, {'Location': self.map_link()}, b''
         if method == 'GET' and (match := re.fullmatch(r'/tarea/([0-9a-f]{12})', path)):
             return self.job_page(session, match[1])
         handler = routes.get((method, path))
@@ -280,6 +284,30 @@ class App:
         if status['rejected']:
             warnings.append(('warn', f'{len(status["rejected"])} intento(s) rechazado(s) por la whitelist. Revísalos en Whitelist.'))
         ip = e(release['lan_ip'])
+        bluemap = status.get('bluemap')
+        if bluemap and bluemap['enabled']:
+            map_row = (f'<a href="{e(self.map_link(status.get("spawn")))}" rel="noreferrer">Ver mapa en el spawn</a> '
+                       f'<span class="muted">({e(self.config["map_url"])})</span>')
+        else:
+            map_row = '<span class="muted">BlueMap desactivado</span>'
+        modules = ''
+        if bluemap:
+            render = {'idle': ('ok', 'Render al día'), 'working': ('warn', 'Renderizando'),
+                      'paused': ('warn', 'Render en pausa')}.get(bluemap['render'], ('warn', 'Render sin datos'))
+            if bluemap['enabled']:
+                state = f'<span class="pill ok">Activo</span> <span class="pill {render[0]}">{render[1]}</span>'
+                pause = 'off' if bluemap['render'] != 'paused' else 'on'
+                buttons = (self.form_button('/modulos', {'do': 'render', 'value': pause},
+                                            'Pausar render' if pause == 'off' else 'Reanudar render', session) +
+                           self.form_button('/modulos', {'do': 'plugin', 'value': 'off'}, 'Desactivar mapa', session, 'danger'))
+            else:
+                state = '<span class="pill bad">Desactivado</span>'
+                buttons = self.form_button('/modulos', {'do': 'plugin', 'value': 'on'}, 'Activar mapa', session, 'primary')
+            modules = (f'<div class="card"><h2>Módulos y consumo</h2><p><strong>BlueMap {e(bluemap["version"])}</strong> {state}</p>'
+                       '<p class="muted">Pausar el render libera CPU al momento y la web del mapa sigue disponible. '
+                       'Desactivar el mapa retira el plugin y libera también su memoria; reinicia el servidor. '
+                       'Para reducir más el consumo baja las distancias de visión y simulación en Ajustes.</p>'
+                       f'<div class="row">{buttons}</div></div>')
         actions = ''.join(
             f'<form class="inline" method="post" action="/accion">{self.csrf(session)}<input type="hidden" name="do" value="{verb}">'
             f'<button class="{"danger" if verb in ("stop", "restart") else ""}">{label}</button></form> '
@@ -296,7 +324,8 @@ class App:
                 f'<div class="card"><h2>Cómo conectarse</h2><div class="scroll"><table>'
                 f'<tr><th>Java {e(release["minecraft"])}</th><td>{ip}:25565</td></tr>'
                 f'<tr><th>Bedrock {e(release["bedrock"])}</th><td>{ip}, puerto 19132</td></tr>'
-                f'<tr><th>Mapa</th><td><a href="/mapa">{e(self.config["map_url"])}</a></td></tr></table></div></div>'
+                f'<tr><th>Mapa</th><td>{map_row}</td></tr></table></div></div>'
+                f'{modules}'
                 f'<div class="card"><h2>Acciones</h2><p class="muted">Parar o reiniciar desconecta a los jugadores. '
                 f'Backup para el servidor un minuto y lo vuelve a arrancar.</p><div class="row">{actions}</div></div>'
                 f'<div class="card"><h2>Versiones</h2><p class="muted">Paper {e(release["paper"])} · Geyser {e(release["geyser"])} · '
@@ -305,12 +334,39 @@ class App:
                 f'<p class="muted">Están en la misma microSD: copia periódicamente alguno fuera de la Pi.</p></div>')
         return 200, {}, self.page('Estado', body, session, '/').encode()
 
+    def map_link(self, spawn=None):
+        """URL del mapa centrada en el spawn: un enlace antiguo puede apuntar a zonas sin generar."""
+        if spawn is None:
+            status = self.helper(['status'])
+            spawn = status.get('spawn') if status.get('ok') else None
+        base = self.config['map_url']
+        if spawn and all(isinstance(v, int) for v in spawn):
+            return f'{base}#world:{spawn[0]}:{spawn[1]}:{spawn[2]}:150:0:0:0:0:perspective'
+        return base
+
     def run_job(self, session, label, argv):
         identifier = self.jobs.start(label, argv)
         if not identifier:
             self.flash(session, 'bad', 'Ya hay otra operación en curso. Espera a que termine.')
             return 303, {'Location': '/'}, b''
         return 303, {'Location': f'/tarea/{identifier}'}, b''
+
+    def form_button(self, action, fields, label, session, cls=''):
+        hidden = ''.join(f'<input type="hidden" name="{e(k)}" value="{e(v)}">' for k, v in fields.items())
+        return (f'<form class="inline" method="post" action="{e(action)}">{self.csrf(session)}{hidden}'
+                f'<button class="{cls}">{e(label)}</button></form> ')
+
+    def modules_post(self, session, form, query):
+        action, value = form.get('do'), form.get('value')
+        if value not in ('on', 'off'):
+            return 400, {}, b''
+        if action == 'render':
+            self.result_flash(session, self.helper(['bluemap-render', value]),
+                              'Render reanudado.' if value == 'on' else 'Render en pausa.')
+            return 303, {'Location': '/'}, b''
+        if action == 'plugin':
+            return self.run_job(session, 'Activar mapa' if value == 'on' else 'Desactivar mapa', ['plugin', 'bluemap', value])
+        return 400, {}, b''
 
     def action(self, session, form, query):
         verb = form.get('do')
@@ -502,15 +558,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
         sys.stderr.write(f'{self.client_address[0]} {fmt % args}\n')
 
 
+class PanelServer(http.server.ThreadingHTTPServer):
+    """TLS por conexión y en su propio hilo: un cliente que no completa el handshake no bloquea el
+    bucle de aceptación. Una petición HTTP sin cifrar al mismo puerto recibe una redirección a HTTPS."""
+    daemon_threads = True
+
+    def __init__(self, address, handler, app, context):
+        super().__init__(address, handler)
+        self.app, self.context = app, context
+
+    def finish_request(self, request, client_address):
+        request.settimeout(15)
+        try:
+            first = request.recv(1, socket.MSG_PEEK)
+            if first != b'\x16':  # no es un ClientHello de TLS
+                if first:
+                    request.recv(4096)
+                    location = f"https://{self.app.config['bind']}:{self.app.config['port']}/"
+                    request.sendall(f'HTTP/1.1 301 Moved Permanently\r\nLocation: {location}\r\n'
+                                    'Content-Length: 0\r\nConnection: close\r\n\r\n'.encode())
+                return
+            request = self.context.wrap_socket(request, server_side=True)
+        except (OSError, ssl.SSLError):
+            return
+        request.settimeout(30)
+        try:
+            self.RequestHandlerClass(request, client_address, self)
+        finally:
+            try:
+                request.close()
+            except OSError:
+                pass
+
+
 def serve(config_path):
     config = json.loads(Path(config_path).read_text())
     app = App(config, Path(config_path))
-    server = http.server.ThreadingHTTPServer((config['bind'], int(config['port'])), Handler)
-    server.app = app
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(config['cert'], config['key'])
-    server.socket = context.wrap_socket(server.socket, server_side=True)
+    server = PanelServer((config['bind'], int(config['port'])), Handler, app, context)
     print(f"Panel en https://{config['bind']}:{config['port']}/", file=sys.stderr)
     server.serve_forever()
 

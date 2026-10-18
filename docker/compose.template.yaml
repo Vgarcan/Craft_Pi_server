@@ -18,6 +18,8 @@ services:
       GEYSER_TRANSPORT: both
       GEYSER_WEBRTC_PORT: "19133"
       GEYSER_ADVERTISE_ADDRESSES: "${LAN_IP:?Falta LAN_IP}:19133"
+      # Plugins gestionados desactivados por el operador (manage.sh plugin bluemap off).
+      MCLAN_DISABLED_PLUGINS: "${DISABLED_PLUGINS:-}"
     ports:
       - "${LAN_IP:?Falta LAN_IP}:25565:25565/tcp"
       - "${LAN_IP:?Falta LAN_IP}:19132:19132/udp"

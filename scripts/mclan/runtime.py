@@ -11,24 +11,18 @@ from .common import Error, LOG, atomic_write, create_only, read_json, run, sha25
 from .classfile import integer_constant
 from .versions import managed_jars
 
-RUNTIME_FILES = ('Dockerfile', 'entrypoint.sh', 'probe.py')
+RUNTIME_FILES = ('Dockerfile', 'entrypoint.sh', 'probe.py', 'bluemap-setup.sh')
+# Plugins gestionados que el operador puede desactivar para ahorrar recursos.
+OPTIONAL_PLUGINS = ('bluemap',)
 # Plantillas Compose publicadas antes de la actual. Sólo un compose.yaml idéntico a
 # una de ellas se considera gestionado y sustituible por manage.sh update.
 PREVIOUS_TEMPLATES = {
     'f6e743cab95f8778c5e6e6c295b7c0a1d7e167d9f9db311efd9475ff90e02d60': '0.1.0',
     '30a994d1520b335cfa6d3d0a9542a75a7be6ed20ffe4348339558bc8e0046cab': '0.2.0',
+    '08fb44ebac7c3f2e1706354139e54838adf599132c120ef83db157ebd24a85bd': '0.3.0',
 }
 NETHERNET_WEBRTC_PORT = 19133
 BLUEMAP_PORT = 8100
-# Perfil para una Pi de 4 núcleos: un hilo de render (recomendación de BlueMap) y sin métricas.
-# accept-download acepta la EULA de Minecraft para descargar texturas del cliente; sólo se
-# escribe si eula.txt ya registra esa aceptación del operador. BlueMap completa el resto.
-BLUEMAP_CORE = (
-    '# Creado por Craft Pi Server sólo si faltaba. accept-download acepta la EULA de Minecraft\n'
-    '# (https://www.minecraft.net/eula), ya aceptada por el operador en eula.txt.\n'
-    'accept-download: true\ndata: "bluemap"\nrender-thread-count: 1\nupdate-cooldown: 60\n'
-    'full-update-interval: 1440\nregion-file-check-interval: 5\nscan-for-mod-resources: false\n'
-    'metrics: false\nlog: {\n  file: "bluemap/logs/debug.log"\n  append: false\n}\n')
 # Paper con Moonrise (26.x) ya no escribe el mensaje vanilla de guardado final.
 VANILLA_SAVED = 'All dimensions are saved'
 MOONRISE_SAVED = ('Saving worlds', 'Halted I/O scheduler for world', 'All RegionFile I/O tasks to complete')
@@ -60,8 +54,10 @@ class Runtime:
         return read_json(self.active_path)
 
     def env_text(self, active):
+        # DISABLED_PLUGINS sólo aparece si hay alguno: un .env anterior sigue siendo válido.
+        disabled = ' '.join(active.get('disabled_plugins', []))
         return (f"LAN_IP={active['lan_ip']}\nRELEASE_ID={active['id']}\n"
-                f"RUNTIME_IMAGE={active['runtime_image']}\n")
+                f"RUNTIME_IMAGE={active['runtime_image']}\n" + (f"DISABLED_PLUGINS={disabled}\n" if disabled else ''))
 
     def compose(self, *arguments, capture=False, check=True, timeout=1200, pending=False):
         extra = ['-f', self.state / 'transaction.override.yaml'] if pending else []
@@ -201,7 +197,7 @@ class Runtime:
     def start(self, timeout=900, *, pending=False, allow_drift=False):
         if (self.state / 'operation.json').exists() and not pending:
             raise Error('Hay una operación interrumpida. Usa restore con un backup completo; consulta recuperación.')
-        self.prepare_plugins(self.validate(allow_drift=allow_drift))
+        self.validate(allow_drift=allow_drift)
         if pending:
             # Durante el primer arranque de una transacción, un reinicio del host
             # no debe reabrir automáticamente un mundo aún no verificado.
@@ -209,20 +205,21 @@ class Runtime:
         self.compose('up', '-d', '--no-build', 'minecraft', pending=pending)
         self.verify(timeout)
 
-    def prepare_plugins(self, active):
-        """Configuración inicial de plugins opcionales; nunca sobrescribe la del operador."""
-        if 'bluemap' not in active:
-            return
-        eula = (self.data / 'eula.txt').read_text().splitlines() if (self.data / 'eula.txt').exists() else []
-        if 'eula=true' not in eula:
-            return
-        folder = self.data / 'plugins/BlueMap'
-        if folder.is_symlink():
-            raise Error('No se admiten enlaces en plugins/BlueMap.')
-        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if create_only(folder / 'core.conf', BLUEMAP_CORE):
-            for path in (self.data / 'plugins', folder, folder / 'core.conf'):
-                os.chown(path, 10000, 10000)
+    def set_plugin(self, name, enabled):
+        """Activa o desactiva un plugin opcional; el cambio se aplica en el siguiente arranque."""
+        if name not in OPTIONAL_PLUGINS:
+            raise Error(f'Plugin no gestionable: {name}')
+        active = self.active()
+        if name not in active:
+            raise Error(f'La release activa no incluye {name}.')
+        disabled = set(active.get('disabled_plugins', []))
+        if enabled:
+            disabled.discard(name)
+        else:
+            disabled.add(name)
+        active['disabled_plugins'] = sorted(disabled)
+        self.activate(active)
+        return active
 
     def finish_transaction(self):
         (self.state / 'operation.json').unlink(missing_ok=True)
@@ -264,13 +261,13 @@ class Runtime:
         if not re.search(rf"(?<![0-9.]){re.escape(active['minecraft'])}(?![0-9.])", java['version']['name']):
             raise Error('Java Status no anuncia la versión Minecraft fijada.')
         self.verify_nethernet(active, info)
-        if 'bluemap' in active:
+        if plugin_active(active, 'bluemap'):
             self.verify_bluemap(active)
         LOG.info('Verificación local correcta: Java %s; Bedrock %s; signaling NetherNet activo.',
                  java['version']['name'], bedrock['version'])
         print(f"Java: {active['lan_ip']}:25565 (Minecraft {active['minecraft']})")
         print(f"Bedrock: dirección {active['lan_ip']}, puerto 19132; compatibles: {active['compatibility']['bedrock']}")
-        if 'bluemap' in active:
+        if plugin_active(active, 'bluemap'):
             print(f"Mapa BlueMap {active['bluemap']['version']}: http://{active['lan_ip']}:{BLUEMAP_PORT}/")
         print(f"NetherNet: signaling TCP 19132 y WebRTC UDP {NETHERNET_WEBRTC_PORT} en {active['lan_ip']} "
               '(no verificado con un cliente 26.60 hasta que exista).')
@@ -289,7 +286,14 @@ class Runtime:
             raise Error(f"El signaling NetherNet no responde en {active['lan_ip']}:19132/tcp.") from exc
 
     def verify_bluemap(self, active, timeout=90):
-        """BlueMap arranca su web de forma asíncrona tras Paper: se espera a que sirva la página."""
+        """BlueMap arranca su web de forma asíncrona tras Paper: se espera a que sirva la página.
+        En el primer arranque BlueMap genera los mapas después del entrypoint: se aplican aquí los
+        ajustes de bluemap-setup.sh, dentro del contenedor y como su usuario, y se recarga."""
+        result = self.compose('exec', '-T', 'minecraft', '/opt/mclan/bluemap-setup.sh', '/data/plugins/BlueMap',
+                              capture=True, timeout=60)
+        if 'changed' in result.stdout:
+            LOG.info('Ajustes de BlueMap aplicados a mapas nuevos; recargando BlueMap.')
+            self.exec_probe('rcon', 'bluemap', 'reload')
         from urllib.request import urlopen
         from urllib.error import URLError
         deadline = time.monotonic() + timeout
@@ -331,13 +335,17 @@ class Runtime:
                 dump.chmod(0o600)
 
 
+def plugin_active(active, name):
+    return name in active and name not in active.get('disabled_plugins', [])
+
+
 def validate_diagnostic(diagnostic, active, protocol):
     """Se comprueba la build realmente cargada, plugins activos y protocolo Java real."""
     plugins = diagnostic['bootstrapInfo']['plugins']
     enabled = {p['name'].lower() for p in plugins if p.get('enabled') is True}
     if not {'geyser-spigot', 'floodgate'} <= enabled:
         raise Error('Geyser y Floodgate no aparecen ambos habilitados en Paper.')
-    if 'bluemap' in active and 'bluemap' not in enabled:
+    if plugin_active(active, 'bluemap') and 'bluemap' not in enabled:
         raise Error('BlueMap forma parte de la release pero no aparece habilitado en Paper.')
     info = diagnostic['versionInfo']['mcInfo']
     if diagnostic['bootstrapInfo'].get('onlineMode') is not True:

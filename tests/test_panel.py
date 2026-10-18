@@ -34,6 +34,8 @@ def status(**changes):
         'container': {'exists': True, 'running': True, 'status': 'running', 'health': 'healthy', 'restarts': 0,
                       'started_at': 'x', 'memory': {'used': 2**30, 'limit': 3 * 2**30}},
         'players': 'There are 1 of a max of 6 players online: <script>alert(1)</script>',
+        'bluemap': {'version': '5.29', 'enabled': True, 'render': 'idle'},
+        'spawn': [-32, 64, 0],
         'host': {'temperature': 48.2, 'memory_limits': True},
         'pending_operation': False, 'project_drift': False,
         'properties': {'motd': 'Hola <b>', 'difficulty': 'normal', 'gamemode': 'survival', 'max-players': '6',
@@ -83,6 +85,29 @@ class HelperValidationTests(unittest.TestCase):
         self.assertEqual(values['motd'], 'Servidor de Víctor 🎮')
         self.assertEqual(values['pvp'], 'false')
         self.assertEqual(helper.read_properties('a=x\\\\y\nb=\\u00e9\n'), {'a': 'x\\y', 'b': 'é'})
+
+    def test_new_verbs_are_validated(self):
+        self.assertEqual(helper.parse(['bluemap-render', 'off'])[1], ['off'])
+        self.assertEqual(helper.parse(['plugin', 'bluemap', 'on'])[1], ['bluemap', 'on'])
+        for argv in (['plugin', 'geyser', 'off'], ['plugin', 'bluemap'], ['bluemap-render', 'pause']):
+            with self.subTest(argv=argv), self.assertRaises(ValueError):
+                helper.parse(argv)
+
+    def test_bluemap_render_state_and_world_spawn(self):
+        import gzip
+        import struct
+        self.assertEqual(helper.bluemap_render('BlueMap Status >\n ✔ 1 render-thread is idle'), 'idle')
+        self.assertEqual(helper.bluemap_render('Render-Threads are STOPPED!'), 'paused')
+        with tempfile.TemporaryDirectory() as directory:
+            level = Path(directory) / 'level.dat'
+            payload = b'\x0a\x00\x00\x0a\x00\x05spawn' + b'\x0b\x00\x03pos' + struct.pack('>iiii', 3, -32, 64, 0)
+            with gzip.open(level, 'wb') as stream:
+                stream.write(payload)
+            self.assertEqual(helper.world_spawn(level), [-32, 64, 0])
+            link = Path(directory) / 'link.dat'
+            link.symlink_to(level)
+            self.assertIsNone(helper.world_spawn(link))
+            self.assertIsNone(helper.world_spawn(Path(directory) / 'missing.dat'))
 
     def test_floodgate_uuid_from_xuid(self):
         self.assertEqual(helper.floodgate_uuid('2535412345678901'), '00000000-0000-0000-0009-01f1b0392c35')
@@ -151,6 +176,54 @@ class HelperValidationTests(unittest.TestCase):
         self.assertEqual(panel.rcon.call_args_list[-1].args, ('whitelist', 'on'))
 
 
+class PanelNetworkTests(unittest.TestCase):
+    """Servidor real con TLS: redirección HTTP y aislamiento de clientes que no hablan."""
+
+    def setUp(self):
+        import shutil
+        import ssl
+        import subprocess
+        if not shutil.which('openssl'):
+            self.skipTest('openssl no disponible')
+        self.temp = tempfile.TemporaryDirectory()
+        cert, key = Path(self.temp.name) / 'c.pem', Path(self.temp.name) / 'k.pem'
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes',
+                        '-days', '1', '-subj', '/CN=test', '-addext', 'subjectAltName=IP:127.0.0.1',
+                        '-keyout', str(key), '-out', str(cert)], check=True, capture_output=True)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        app = server.App({'bind': '127.0.0.1', 'port': 0, 'map_url': 'http://127.0.0.1:8100/',
+                          'password': server.hash_password('contraseña-larga', iterations=1000)})
+        self.httpd = server.PanelServer(('127.0.0.1', 0), server.Handler, app, context)
+        app.config['port'] = self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.client = ssl.create_default_context(cafile=str(cert))
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.temp.cleanup()
+
+    def test_plain_http_is_redirected_to_https(self):
+        import socket
+        with socket.create_connection(('127.0.0.1', self.port), timeout=5) as sock:
+            sock.sendall(b'GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n')
+            reply = sock.recv(4096).decode()
+        self.assertTrue(reply.startswith('HTTP/1.1 301'))
+        self.assertIn(f'Location: https://127.0.0.1:{self.port}/', reply)
+
+    def test_silent_client_does_not_block_other_users(self):
+        import socket
+        silent = socket.create_connection(('127.0.0.1', self.port), timeout=5)
+        try:
+            started = time.monotonic()
+            with urlopen(f'https://127.0.0.1:{self.port}/login', context=self.client, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+            self.assertLess(time.monotonic() - started, 3)
+        finally:
+            silent.close()
+
+
 class PanelAppTests(unittest.TestCase):
     def setUp(self):
         self.helper = Mock(side_effect=self.fake_helper)
@@ -167,8 +240,8 @@ class PanelAppTests(unittest.TestCase):
             return status()
         return {'ok': True, 'output': 'hecho'}
 
-    def request(self, method, path, body='', cookie=None, origin=None, ip='192.168.1.9'):
-        headers = {}
+    def request(self, method, path, body='', cookie=None, origin=None, ip='192.168.1.9', host='192.168.1.50:8443'):
+        headers = {'Host': host}
         if cookie:
             headers['Cookie'] = cookie
         if origin:
@@ -187,6 +260,32 @@ class PanelAppTests(unittest.TestCase):
         for method, path in (('GET', '/'), ('GET', '/whitelist'), ('POST', '/accion'), ('GET', '/mapa')):
             self.assertEqual(self.request(method, path)[:2], (303, {'Location': '/login'}))
         self.helper.assert_not_called()
+
+    def test_foreign_host_header_is_rejected(self):
+        # DNS rebinding: una página externa que resuelve su dominio a la Pi no llega a las rutas.
+        self.assertEqual(self.request('GET', '/login', host='evil.example')[0], 421)
+        self.assertEqual(self.request('POST', '/login', 'password=contrase%C3%B1a-larga', host='evil.example:8443')[0], 421)
+        self.assertEqual(self.request('GET', '/login', host='192.168.1.50')[0], 200)
+
+    def test_map_controls_and_spawn_link(self):
+        cookie, csrf = self.login()
+        body = self.request('GET', '/', cookie=cookie)[2]
+        self.assertIn(b'Ver mapa en el spawn', body)
+        self.assertIn(b'#world:-32:64:0:150', body)
+        self.assertIn(b'Pausar render', body)
+        self.assertEqual(self.request('GET', '/mapa', cookie=cookie)[1]['Location'],
+                         'http://192.168.1.50:8100/#world:-32:64:0:150:0:0:0:0:perspective')
+        self.request('POST', '/modulos', f'csrf={csrf}&do=render&value=off', cookie)
+        self.assertEqual(self.calls[-1], ['bluemap-render', 'off'])
+        self.app.jobs.runner = Mock(return_value={'ok': True, 'output': ''})
+        location = self.request('POST', '/modulos', f'csrf={csrf}&do=plugin&value=off', cookie)[1]['Location']
+        self.assertTrue(location.startswith('/tarea/'))
+        for _ in range(50):
+            if self.app.jobs.runner.called:
+                break
+            time.sleep(0.02)
+        self.assertEqual(self.app.jobs.runner.call_args.args[0], ['plugin', 'bluemap', 'off'])
+        self.assertEqual(self.request('POST', '/modulos', f'csrf={csrf}&do=plugin&value=rm', cookie)[0], 400)
 
     def test_wrong_passwords_are_throttled(self):
         for _ in range(server.MAX_FAILURES):
@@ -277,6 +376,7 @@ class PanelAppTests(unittest.TestCase):
     def test_http_handler_sets_security_headers_and_limits_body(self):
         httpd = http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
         httpd.app = self.app
+        self.app.config.update(bind='127.0.0.1', port=httpd.server_address[1])
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         try:

@@ -51,7 +51,7 @@ def sample_active(root):
     active.update(lan_ip='192.168.1.25', runtime_image='mclan-runtime:sample',
                   java_base='eclipse-temurin@sha256:' + '1'*64,
                   geyser_config_version=10,
-                  runtime_sources={n: sha256(ROOT / 'docker' / n) for n in ('Dockerfile', 'entrypoint.sh', 'probe.py')})
+                  runtime_sources={n: sha256(ROOT / 'docker' / n) for n in runtime_module.RUNTIME_FILES})
     release = root / 'releases' / active['id']
     release.mkdir(parents=True)
     for key, name in managed_jars(active):
@@ -441,6 +441,7 @@ class DiagnosticTests(unittest.TestCase):
         active = versions.resolve(FakeClient())
         diagnostic = self.diagnostic()
         with self.assertRaises(Error): validate_diagnostic(diagnostic, active, 999)
+        validate_diagnostic(diagnostic, dict(active, disabled_plugins=['bluemap']), 999)
         diagnostic['bootstrapInfo']['plugins'].append({'name': 'BlueMap', 'enabled': True})
         validate_diagnostic(diagnostic, active, 999)
         old = {k: v for k, v in active.items() if k != 'bluemap'}
@@ -459,7 +460,7 @@ class BackupTests(unittest.TestCase):
         self.runtime = Runtime(self.root)
         self.runtime.state.mkdir()
         (self.root / 'docker').mkdir()
-        for name in ('Dockerfile', 'entrypoint.sh', 'probe.py', 'compose.template.yaml'):
+        for name in (*runtime_module.RUNTIME_FILES, 'compose.template.yaml'):
             (self.root / 'docker' / name).write_bytes((ROOT / 'docker' / name).read_bytes())
         self.active = sample_active(self.root)
         self.runtime.activate(self.active)
@@ -554,7 +555,7 @@ class BackupTests(unittest.TestCase):
         with self.assertRaises(Error): real.template_drift()
         (self.root / 'compose.yaml').write_bytes((ROOT / 'docker/compose.template.yaml').read_bytes())
         self.assertFalse(real.template_drift())
-        drifted = dict(self.active, runtime_sources={'Dockerfile': '0'*64, 'entrypoint.sh': '0'*64, 'probe.py': '0'*64})
+        drifted = dict(self.active, runtime_sources={n: '0'*64 for n in runtime_module.RUNTIME_FILES})
         self.assertTrue(real.runtime_drift(drifted))
         self.assertFalse(real.runtime_drift(self.active))
 
@@ -615,22 +616,56 @@ class BackupTests(unittest.TestCase):
         self.assertFalse([n for n in names if n.startswith('data/bluemap/web/maps')])
         backups.validate_archive(path, self.root / 'unused', extract=False)
 
-    def test_bluemap_core_config_created_once_and_only_with_eula(self):
+    def test_bluemap_setup_script_runs_as_container_user_logic(self):
+        import subprocess
+        folder = self.root / 'BlueMap'
+        script = ROOT / 'docker/bluemap-setup.sh'
+        first = subprocess.run(['sh', str(script), str(folder)], capture_output=True, text=True, check=True)
+        self.assertEqual(first.stdout, '')
+        core = folder / 'core.conf'
+        self.assertIn('render-thread-count: 1', core.read_text())
+        core.write_text('render-thread-count: 2\n')
+        (folder / 'maps').mkdir()
+        (folder / 'maps/world.conf').write_text('world: "world"\nignore-missing-light-data: false\n')
+        second = subprocess.run(['sh', str(script), str(folder)], capture_output=True, text=True, check=True)
+        self.assertEqual(second.stdout.strip(), 'changed')
+        self.assertEqual(core.read_text(), 'render-thread-count: 2\n')
+        self.assertIn('ignore-missing-light-data: true', (folder / 'maps/world.conf').read_text())
+        # Si el operador lo revierte después, no se vuelve a tocar.
+        conf = folder / 'maps/world.conf'
+        conf.write_text(conf.read_text().replace('ignore-missing-light-data: true', 'ignore-missing-light-data: false'))
+        third = subprocess.run(['sh', str(script), str(folder)], capture_output=True, text=True, check=True)
+        self.assertEqual(third.stdout, '')
+        self.assertIn('ignore-missing-light-data: false', conf.read_text())
+        # Un mapa que es un enlace no se sigue.
+        (folder / 'maps/evil.conf').symlink_to(self.root / 'outside.conf')
+        (self.root / 'outside.conf').write_text('ignore-missing-light-data: false\n')
+        subprocess.run(['sh', str(script), str(folder)], capture_output=True, text=True, check=True)
+        self.assertEqual((self.root / 'outside.conf').read_text(), 'ignore-missing-light-data: false\n')
+
+    def test_disabling_bluemap_changes_env_and_relaxes_checks(self):
+        from mclan.runtime import plugin_active
         real = Runtime(self.root)
-        with patch('mclan.runtime.os.chown'):
-            real.prepare_plugins(self.active)
-            self.assertFalse((self.runtime.data / 'plugins/BlueMap/core.conf').exists())
-            (self.runtime.data / 'eula.txt').write_text('eula=true\n')
-            real.prepare_plugins(self.active)
-            core = self.runtime.data / 'plugins/BlueMap/core.conf'
-            self.assertIn('accept-download: true', core.read_text())
-            self.assertIn('render-thread-count: 1', core.read_text())
-            core.write_text('accept-download: true\nrender-thread-count: 2\n')
-            real.prepare_plugins(self.active)
-            self.assertIn('render-thread-count: 2', core.read_text())
-            (self.runtime.data / 'plugins/BlueMap').rename(self.runtime.data / 'moved')
-            real.prepare_plugins({k: v for k, v in self.active.items() if k != 'bluemap'})
-            self.assertFalse((self.runtime.data / 'plugins/BlueMap').exists())
+        env_before = (self.root / '.env').read_text()
+        self.assertNotIn('DISABLED_PLUGINS', env_before)
+        active = real.set_plugin('bluemap', False)
+        self.assertEqual(active['disabled_plugins'], ['bluemap'])
+        self.assertIn('DISABLED_PLUGINS=bluemap\n', (self.root / '.env').read_text())
+        self.assertFalse(plugin_active(active, 'bluemap'))
+        real.set_plugin('bluemap', True)
+        self.assertEqual((self.root / '.env').read_text(), env_before)
+        with self.assertRaises(Error): real.set_plugin('geyser', False)
+
+    def test_manage_plugin_command_stops_toggles_and_restarts(self):
+        self.runtime.running.return_value = True
+        args = argparse.Namespace(command='plugin', name='bluemap', state='off', timeout=10)
+        self.runtime.set_plugin = Mock()
+        with patch('mclan.cli.run', return_value=Mock(stdout='unix:///var/run/docker.sock\n')), \
+             patch('mclan.cli.settings', return_value={'contact': 'https://example.com'}):
+            cli.manage(self.runtime, args)
+        self.runtime.stop.assert_called_once()
+        self.runtime.set_plugin.assert_called_once_with('bluemap', False)
+        self.runtime.start.assert_called_once_with(10)
 
     def test_install_repeat_does_not_resolve_or_overwrite_world(self):
         args = argparse.Namespace(contact=None, lan_ip=None, minecraft_version=None,

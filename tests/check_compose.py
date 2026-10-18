@@ -43,6 +43,7 @@ def check(binary=None):
         assert service['environment']['GEYSER_TRANSPORT'] == 'both'
         assert service['environment']['GEYSER_WEBRTC_PORT'] == '19133'
         assert service['environment']['GEYSER_ADVERTISE_ADDRESSES'] == '192.168.1.50:19133'
+        assert service['environment']['MCLAN_DISABLED_PLUGINS'] == ''
         assert 25575 not in {p['target'] for p in service['ports']}
         volumes = {v['target']: v for v in service['volumes']}
         assert set(volumes) == {'/data', '/opt/release'}

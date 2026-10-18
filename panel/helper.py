@@ -168,6 +168,33 @@ def container_memory(container_id):
         return None
 
 
+def world_spawn(level_dat):
+    """Spawn del mundo (int array 'pos' de level.dat, formato 26.x) para centrar el mapa; None si no se lee."""
+    import struct
+    try:
+        fd = os.open(level_dat, os.O_RDONLY | os.O_NOFOLLOW)
+        with gzip.open(os.fdopen(fd, 'rb')) as stream:
+            data = stream.read(1024**2)
+        index = data.find(b'\x0b\x00\x03pos')
+        if index < 0 or struct.unpack('>i', data[index + 6:index + 10])[0] != 3:
+            return None
+        return list(struct.unpack('>iii', data[index + 10:index + 22]))
+    except (OSError, EOFError, struct.error, ValueError):
+        return None
+
+
+def bluemap_render(console):
+    """Estado del render a partir de la salida de /bluemap."""
+    text = console.lower()
+    if 'stopped' in text or 'not running' in text:
+        return 'paused'
+    if 'idle' in text:
+        return 'idle'
+    if 'render' in text:
+        return 'working'
+    return None
+
+
 def temperature():
     try:
         return int(Path('/sys/class/thermal/thermal_zone0/temp').read_text()) / 1000
@@ -224,6 +251,16 @@ class Panel:
             except Error:
                 players = None
         whitelist = self.whitelist()
+        bluemap = None
+        if 'bluemap' in active:
+            enabled = 'bluemap' not in active.get('disabled_plugins', [])
+            render = None
+            if enabled and players is not None:
+                try:
+                    render = bluemap_render(self.rcon('bluemap'))
+                except Error:
+                    render = None
+            bluemap = {'version': active['bluemap']['version'], 'enabled': enabled, 'render': render}
         backups = sorted((self.root / 'backups').glob('*.tar.gz'), key=lambda p: p.stat().st_mtime, reverse=True)
         return {
             'release': {key: active[key] for key in ('id', 'minecraft', 'lan_ip') if key in active}
@@ -237,6 +274,8 @@ class Panel:
                           'started_at': state.get('StartedAt'),
                           'memory': container_memory(info['Id']) if info else None},
             'players': players,
+            'bluemap': bluemap,
+            'spawn': world_spawn(self.runtime.data / 'world/level.dat'),
             'host': {'temperature': temperature(), 'memory_limits': host.memory_limits()},
             'pending_operation': (self.runtime.state / 'operation.json').exists(),
             'project_drift': self.runtime.template_drift() or self.runtime.runtime_drift(active),
@@ -252,9 +291,9 @@ class Panel:
     def logs(self, lines):
         return {'log': COLOR.sub('', self.server_log(tail=lines))}
 
-    def manage(self, command):
+    def manage(self, *command):
         # manage.sh ya gestiona bloqueo, verificación y backups; se reutiliza tal cual.
-        result = subprocess.run([str(self.root / 'manage.sh'), command], capture_output=True, text=True,
+        result = subprocess.run([str(self.root / 'manage.sh'), *command], capture_output=True, text=True,
                                 timeout=7200, check=False, stdin=subprocess.DEVNULL)
         return {'ok': result.returncode == 0, 'output': result.stdout + result.stderr}
 
@@ -317,6 +356,13 @@ class Panel:
             self.runtime.start()
         return {'ok': True, 'output': 'Ajustes guardados' + (' y servidor reiniciado.' if running else '.')}
 
+    def bluemap_render_switch(self, value):
+        output = self.rcon('bluemap', 'start' if value == 'on' else 'stop')
+        return {'ok': True, 'output': output or ('Render reanudado.' if value == 'on' else 'Render en pausa.')}
+
+    def plugin(self, name, value):
+        return self.manage('plugin', name, value)
+
     def audit(self):
         result = subprocess.run([str(self.root / 'tools/audit.sh')], capture_output=True, text=True,
                                 timeout=120, check=False, stdin=subprocess.DEVNULL)
@@ -362,6 +408,12 @@ def parse(argv):
         return verb, [args[0], int(integer(1, 15)(args[1]))], True
     if verb == 'set-properties':
         return verb, [validate_changes(args)], True
+    if verb == 'bluemap-render':
+        expect(1)
+        return verb, [choice('on', 'off')(args[0])], True
+    if verb == 'plugin':
+        expect(2)
+        return verb, [choice('bluemap')(args[0]), choice('on', 'off')(args[1])], False  # manage.sh bloquea
     raise ValueError(f'verbo desconocido: {verb}')
 
 
@@ -382,6 +434,10 @@ def execute(panel, verb, args):
         return panel.whitelist_switch(*args)
     if verb == 'whitelist-open-for':
         return panel.open_for(*args)
+    if verb == 'bluemap-render':
+        return panel.bluemap_render_switch(*args)
+    if verb == 'plugin':
+        return panel.plugin(*args)
     return panel.set_properties(*args)
 
 

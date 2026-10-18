@@ -51,6 +51,10 @@ def parser():
     rebind = commands.add_parser('rebind', help='Cambiar la IP publicada después de un cambio DHCP')
     rebind.add_argument('ip')
     rebind.add_argument('--timeout', type=int, default=900)
+    plugin = commands.add_parser('plugin', help='Activar o desactivar un plugin opcional (reinicia si estaba en marcha)')
+    plugin.add_argument('name', choices=['bluemap'])
+    plugin.add_argument('state', choices=['on', 'off'])
+    plugin.add_argument('--timeout', type=int, default=900)
     console = commands.add_parser('command', help='Enviar un comando administrativo mediante RCON interno')
     console.add_argument('text', nargs='+', help='Usa comillas, por ejemplo: "whitelist add Victor"')
     return p
@@ -273,6 +277,19 @@ def manage(runtime, args):
         runtime.activate(active)
         current['lan_ip'] = ip
         write_json(runtime.root / 'config/settings.json', current)
+        if running:
+            runtime.start(args.timeout)
+    elif command == 'plugin':
+        if (runtime.state / 'operation.json').exists():
+            raise Error('Resuelve primero la operación interrumpida.')
+        enabled = args.state == 'on'
+        if (args.name not in active.get('disabled_plugins', [])) == enabled:
+            print(f"{args.name} ya está {'activado' if enabled else 'desactivado'}.")
+            return
+        running = runtime.running()
+        runtime.stop()
+        runtime.set_plugin(args.name, enabled)
+        LOG.info('Plugin %s %s.', args.name, 'activado' if enabled else 'desactivado')
         if running:
             runtime.start(args.timeout)
     elif command == 'command':
