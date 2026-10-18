@@ -472,7 +472,7 @@ class App:
         name = form.get('name', '').strip()
         if action == 'add' and form.get('edition') in EDITIONS:
             result = self.helper(['whitelist-add', form['edition'], name], timeout=60)
-            if not result.get('ok') and 'not find user in our cache' in (result.get('output') or ''):
+            if not result.get('ok') and 'find user in our cache' in (result.get('output') or ''):
                 # Floodgate sólo resuelve gamertags que la caché global de GeyserMC ya conoce.
                 self.flash(session, 'warn', f'Floodgate no conoce todavía a {name}: la caché global de GeyserMC no tiene su '
                            'identificador de Xbox (XUID). Pulsa «Abrir 5 min y esperar» en su fila y pídele que entre '
