@@ -209,6 +209,13 @@ Migración tratada aparte, sobre copias, como se pidió al inicio del proyecto.
 | Verificación | `start` correcto (Java, Bedrock, NetherNet, BlueMap) |
 | Mapa | Teselas antiguas borradas y render forzado: 1414 teselas de detalle en el mundo normal, unos 10 minutos con un hilo, pico de 59 °C, sin throttling, 94 MB |
 
+**Luz (corregido después):** el mapa se veía casi negro. Chunker escribe los arrays `SkyLight` **todos a cero** (0 % de bytes no nulos, frente al 78 % de un mundo de Paper) y no añade `starlight.light_version`. Esto también afecta al juego: oscuridad y monstruos de día.
+
+- Corrección: `tools/relight.py` carga una vez cada chunk existente dentro del contenedor y Paper/Moonrise recalcula la luz. Ensayado primero en una copia aislada: 166 s, del 0 % al 75–81 % de luz de cielo.
+- Aplicado en producción tras un backup verificado (`backups/…184750…-manual.tar.gz`, mundo tal como se importó): 3 min 17 s, pico de 63 °C. Después, `bluemap purge` y render completo.
+- Efecto secundario medido: forceload exige vecinos completos. Los chunks completos pasan de 3216 a 3974, un anillo de 1–2 chunks en el borde explorado generado con la misma semilla. Además hay unos 10.000 chunks a medio generar, invisibles. Es equivalente a acercarse al borde jugando.
+- `save-all flush` superó el timeout de 4 s de la sonda RCON. El script ahora reintenta los comandos lentos y tolera ese caso.
+
 **Pendiente:** el inventario del jugador Bedrock (6 objetos y su posición) quedó con UUID `00000000-0000-0000-0000-000000000000`. Se asignará a su UUID de Floodgate cuando entre por primera vez, con el servidor parado.
 
 Lección para BlueMap: tras cambiar el mundo hay que borrar `data/bluemap/web/maps` y forzar `bluemap force-update` en cada mapa; si no, BlueMap considera los mapas al día.

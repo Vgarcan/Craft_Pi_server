@@ -373,6 +373,43 @@ class PackagingTests(unittest.TestCase):
                 host.lan_ip('8.8.4.4')
 
 
+class RelightTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('relight', ROOT / 'tools/relight.py')
+        self.relight = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.relight)
+
+    def test_only_chunks_present_in_region_headers_are_loaded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            world = Path(directory)
+            region = world / 'overworld/region'
+            region.mkdir(parents=True)
+            header = bytearray(8192)
+            header[0:4] = struct.pack('>I', (2 << 8) | 1)        # chunk (0,0) de la región
+            header[33 * 4:33 * 4 + 4] = struct.pack('>I', (3 << 8) | 1)  # chunk (1,1)
+            (region / 'r.-1.2.mca').write_bytes(bytes(header))
+            self.assertEqual(list(self.relight.existing_chunks(region)), [(-32, 64), (-31, 65)])
+            sent = []
+            self.relight.relight(sent.append, world=world, pause=0, log=lambda _: None)
+        prefix = 'execute in minecraft:overworld run '
+        self.assertEqual(sent, [f'{prefix}forceload add -512 1024', f'{prefix}forceload add -496 1040',
+                                f'{prefix}forceload remove all', 'save-all flush'])
+
+    def test_slow_commands_are_retried_and_slow_save_is_tolerated(self):
+        calls = []
+        def flaky(text):
+            calls.append(text)
+            if text == 'save-all flush' or len(calls) == 1:
+                raise TimeoutError('timed out')
+            return ''
+        with patch.object(self.relight.time, 'sleep'):
+            self.assertEqual(self.relight.command(flaky, 'forceload add 0 0'), '')
+            messages = []
+            with tempfile.TemporaryDirectory() as directory:
+                self.relight.relight(flaky, world=Path(directory), pause=0, log=messages.append)
+        self.assertTrue(any('save-all sigue en curso' in m for m in messages))
+
+
 class ProtocolTests(unittest.TestCase):
     def test_varint_and_truncated_input(self):
         class Reader:

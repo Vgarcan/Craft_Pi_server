@@ -6,7 +6,7 @@ cd "$PROJECT_DIR"
 for script in install.sh manage.sh docker/entrypoint.sh docker/bluemap-setup.sh tests/run.sh tools/audit.sh panel/install.sh; do
     bash -n "$script"
 done
-python3 -m compileall -q scripts docker tests panel
+python3 -m compileall -q scripts docker tests panel tools
 python3 -m unittest discover -s tests -v
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     python3 tests/check_compose.py

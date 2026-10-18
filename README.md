@@ -504,4 +504,6 @@ No hay un comando automático: es una migración que conviene revisar cada vez. 
 3. Revisar los avisos `Missing entity mapping`: esas entidades se pierden.
 4. Probar el mundo en un Paper aislado (sin red ni puertos) antes de tocar producción.
 5. `stop`, `backup`, apartar `data/world`, copiar el mundo convertido con propietario `10000:10000` y `start`.
-6. Fijar el spawn si Bedrock usaba «buscar superficie» (`setworldspawn X Y Z`), y regenerar el mapa: borra `data/bluemap/web/maps` con el servidor parado y lanza `bluemap force-update MAPA`.
+6. Fijar el spawn si Bedrock usaba «buscar superficie» (`setworldspawn X Y Z`).
+7. **Recalcular la luz.** Chunker deja la luz de cielo a cero, y sin este paso el mundo se ve oscuro en el mapa y en el juego. Haz `backup` y, con el servidor en marcha y sin jugadores, ejecuta `sudo docker compose --project-name minecraft-lan --project-directory . --env-file .env -f compose.yaml exec -T minecraft python3 - < tools/relight.py`. Genera un anillo de chunks en el borde explorado (ver el propio script).
+8. Regenerar el mapa: `bluemap purge MAPA` en cada mapa.
