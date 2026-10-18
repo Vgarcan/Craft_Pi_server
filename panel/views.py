@@ -116,9 +116,11 @@ class Views:
     def csrf(session):
         return f'<input type="hidden" name="csrf" value="{e(session["csrf"])}">'
 
-    def button(self, action, fields, label, session, kind='', confirm=''):
+    def button(self, action, fields, label, session, kind='', confirm='', job=False):
+        """job=True: la acción es una tarea larga; app.js la lanza en segundo plano y avisa al terminar."""
         hidden = ''.join(f'<input type="hidden" name="{e(k)}" value="{e(v)}">' for k, v in fields.items())
         ask = f' data-confirm="{e(confirm)}"' if confirm else ''
+        ask += ' data-async' if job else ''
         return (f'<form class="inline" method="post" action="{e(action)}"{ask}>{self.csrf(session)}{hidden}'
                 f'<button class="mc-btn {e(kind)}">{e(label)}</button></form>')
 
@@ -164,7 +166,11 @@ class Views:
                       f'<button aria-label="Log out" data-key="9">{self.texture("barrier", "", "item") or "<span class=item-letter>X</span>"}'
                       '<span class="tooltip">Log out <kbd>9</kbd></span></button></form>')
             nav = f'<nav class="hotbar" aria-label="Main navigation">{slots}</nav>'
-            chip = '<a class="server-chip" href="/" data-nav data-live="chip"><span class="dot"></span><span class="chip-text">Server</span></a>'
+            chip = ('<div class="chips-top"><button type="button" class="job-tray" data-tray hidden aria-haspopup="dialog">'
+                    '<span class="spinner" aria-hidden="true"></span><span class="tray-text">Jobs</span>'
+                    '<span class="badge-count" hidden></span></button>'
+                    '<a class="server-chip" href="/" data-nav data-live="chip"><span class="dot"></span>'
+                    '<span class="chip-text">Server</span></a></div>')
         toasts = ''.join(f'<div class="toast {e(kind)}" role="status"><strong>{e(self.toast_title(kind))}</strong>'
                          f'<span>{e(text)}</span></div>' for kind, text in flashes)
         meta = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ''
@@ -185,7 +191,10 @@ class Views:
             f'<header class="top"><a class="brand" href="/" data-nav>{logo}<span class="splash">{splash}</span>'
             f'<span class="subtitle">Craft Pi Server</span></a>{chip}</header>'
             f'<div class="toasts">{toasts}</div>'
-            f'<main id="main" data-page="{e(slug)}" data-title="{e(title)} · Craft Pi Server">'
+            + ('<dialog class="mc-dialog" data-jobs-dialog><div class="dialog-head"><h2 data-dialog-title>Operations</h2>'
+               '<button type="button" class="mc-btn small" data-dialog-close>Close</button></div>'
+               '<div data-dialog-body></div></dialog>' if session else '')
+            + f'<main id="main" data-page="{e(slug)}" data-title="{e(title)} · Craft Pi Server">'
             f'<h1 class="page-title">{e(title)}</h1>{body}</main>{nav}</body></html>')
 
     @staticmethod
@@ -227,7 +236,8 @@ class Views:
         actions = ''.join(self.button('/action', {'do': verb}, label, session,
                                       'danger' if verb in ('stop', 'restart') else ('primary' if verb == 'start' else ''),
                                       confirm={'stop': 'Stop the server? Players will be disconnected.',
-                                               'restart': 'Restart the server? Players will be disconnected.'}.get(verb, ''))
+                                               'restart': 'Restart the server? Players will be disconnected.'}.get(verb, ''),
+                                      job=True)
                           for verb, label in ACTIONS.items())
         bluemap = status.get('bluemap')
         map_row = (f'<a href="{e(map_link)}" target="_blank" rel="noopener">Open live map at spawn</a>'
@@ -413,7 +423,7 @@ class Views:
                      self.button('/players', {'do': 'add', 'edition': r['edition'], 'name': r['name']}, 'Allow', session,
                                  'primary small')
                      + (self.button('/players', {'do': 'open', 'edition': 'bedrock', 'name': r['name'], 'minutes': '5'},
-                                    'Open 5 min and wait', session, 'small') if r['edition'] == 'bedrock' else ''))
+                                    'Open 5 min and wait', session, 'small', job=True) if r['edition'] == 'bedrock' else ''))
                     for r in status['rejected']]
         switch = self.button('/players', {'do': 'switch', 'value': 'off' if enabled else 'on'},
                              'Turn whitelist off' if enabled else 'Turn whitelist on', session,
@@ -438,7 +448,7 @@ class Views:
             + self.card('Rejected attempts', self.table(('Name', 'Edition', 'Last try (UTC)', ''), rejected,
                                                          'No recent rejections')
                         + '<p class="muted">Read from the Paper logs of the last 72 hours.</p>', icon=self.texture('barrier', '', 'icon'))
-            + self.card('Temporary opening for one player', f'<form method="post" action="/players">{self.csrf(session)}'
+            + self.card('Temporary opening for one player', f'<form method="post" action="/players" data-async>{self.csrf(session)}'
                         '<input type="hidden" name="do" value="open"><label for="oe">Edition</label>'
                         '<select id="oe" name="edition"><option value="bedrock">Bedrock</option><option value="java">Java</option></select>'
                         '<label for="on">Gamertag or name</label><input id="on" type="text" name="name" maxlength="16" required '
@@ -461,13 +471,15 @@ class Views:
             if not w['active']:
                 actions += self.button('/world', {'do': 'world-activate', 'id': w['id']}, 'Activate', session, 'primary small',
                                        f'Switch the server to "{w["name"]}"? Players are disconnected for about a minute; '
-                                       'a verified backup is taken first.')
+                                       'a verified backup is taken first.', job=True)
             if w['generated']:
-                actions += self.button('/world', {'do': 'world-export', 'id': w['id'], 'format': 'java'}, 'Export Java', session, 'small')
-                actions += self.button('/world', {'do': 'world-export', 'id': w['id'], 'format': 'bedrock'}, 'Export Bedrock', session, 'small')
+                actions += self.button('/world', {'do': 'world-export', 'id': w['id'], 'format': 'java'}, 'Export Java', session,
+                                       'small', job=True)
+                actions += self.button('/world', {'do': 'world-export', 'id': w['id'], 'format': 'bedrock'}, 'Export Bedrock',
+                                       session, 'small', job=True)
             if not w['active']:
                 actions += self.button('/world', {'do': 'world-delete', 'id': w['id']}, 'Delete', session, 'danger small',
-                                       f'Delete "{w["name"]}"? It is archived to backups/worlds first.')
+                                       f'Delete "{w["name"]}"? It is archived to backups/worlds first.', job=True)
             seed = f' · seed <span class="mono">{e(w["seed"])}</span>' if w.get('seed') else ''
             relight = ' · light recalculated on first start' if w.get('needs_relight') else ''
             cards += (f'<article class="world-card{" active" if w["active"] else ""}">'
@@ -477,7 +489,8 @@ class Views:
                       f'<p class="muted">Created {e((w.get("created") or "—")[:10])} · last played {e((w.get("last_active") or "—")[:10])}</p>'
                       f'<div class="row">{actions}</div></div></article>')
         imports = ''.join(f'<option value="{e(f["name"])}">{e(f["name"])} ({f["size"] / 2**20:.0f} MiB)</option>' for f in lib['imports'])
-        import_form = (f'<form method="post" action="/world" class="fields">{self.csrf(session)}<input type="hidden" name="do" value="world-import">'
+        import_form = (f'<form method="post" action="/world" class="fields" data-async>{self.csrf(session)}'
+                       '<input type="hidden" name="do" value="world-import">'
                        f'<div class="field"><label for="imf">File</label><select id="imf" name="file">{imports}</select></div>'
                        '<div class="field"><label for="imn">Name in the library</label><input id="imn" type="text" name="name" '
                        'maxlength="40" required></div><p><button class="mc-btn primary">Import</button></p></form>'
@@ -530,12 +543,12 @@ class Views:
                           + self.button('/world', {'do': 'render', 'value': pause},
                                         'Pause rendering' if pause == 'off' else 'Resume rendering', session)
                           + self.button('/world', {'do': 'plugin', 'value': 'off'}, 'Disable map', session, 'danger',
-                                        'Disable BlueMap? The server restarts and players are disconnected.')
+                                        'Disable BlueMap? The server restarts and players are disconnected.', job=True)
                           + '</div>')
             else:
                 module = (f'<p>{self.pill("bad", "Disabled")}</p>'
                           + self.button('/world', {'do': 'plugin', 'value': 'on'}, 'Enable map', session, 'primary',
-                                        'Enable BlueMap? The server restarts and players are disconnected.'))
+                                        'Enable BlueMap? The server restarts and players are disconnected.', job=True))
             module += ('<p class="muted">Pausing frees CPU instantly and keeps the map online. Disabling removes the '
                        'plugin and its memory use. Lower view and simulation distance below to save more.</p>')
         world = status.get('world') or {}
@@ -561,7 +574,7 @@ class Views:
                         + '<p class="muted">Terrain inside the border is pre-generated, so exploring never makes the Pi '
                           'generate land while you play.</p>', icon=self.texture('spyglass', '', 'icon'))
             + '</div>'
-            + self.card('Server settings', f'<form method="post" action="/world" data-confirm="Save and restart the server? '
+            + self.card('Server settings', f'<form method="post" action="/world" data-async data-confirm="Save and restart the server? '
                         f'Players will be disconnected.">{self.csrf(session)}<input type="hidden" name="do" value="settings">'
                         f'<div class="fields">{fields}</div><p class="muted">Saving stops the server, writes server.properties '
                         'and starts it again. Authentication, ports and RCON are not editable here.</p>'
@@ -591,7 +604,7 @@ class Views:
                 for b in status['backups']]
         return (self.card('Create a backup', '<p class="muted">The server stops for about a minute, every file is hashed '
                           'and verified, and it starts again.</p>'
-                          + self.button('/action', {'do': 'backup'}, 'Backup now', session, 'primary'),
+                          + self.button('/action', {'do': 'backup'}, 'Backup now', session, 'primary', job=True),
                           icon=self.texture('bundle', '', 'icon'))
                 + self.card('Latest backups', self.table(('File', 'Size', 'Created'), rows, 'No backups yet')
                             + '<p class="muted">They live on the same microSD card: copy one off the Pi from time to time.</p>',

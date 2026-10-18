@@ -91,12 +91,14 @@ class Jobs:
             if self.busy():
                 return None
             identifier = secrets.token_hex(6)
-            job = {'id': identifier, 'label': label, 'state': 'running', 'started': time.time(), 'result': None}
+            job = {'id': identifier, 'label': label, 'state': 'running', 'started': time.time(), 'result': None,
+                   'finished': None, 'seen': False}
             self.items[identifier] = job
             for old in sorted(self.items, key=lambda k: self.items[k]['started'])[:-10]:
                 del self.items[old]
         def work():
             job['result'] = self.runner(argv, timeout=7200)
+            job['finished'] = time.time()
             job['state'] = 'done'
         threading.Thread(target=work, daemon=True).start()
         return identifier
@@ -108,6 +110,9 @@ class App:
         self.sessions, self.failures = {}, {}
         self.lock = threading.Lock()
         self.jobs = Jobs(self.helper)
+        # Petición actual hecha por app.js (X-Requested-With: fetch): las tareas responden JSON
+        # en lugar de redirigir a su página, y la navegación no se interrumpe.
+        self.local = threading.local()
         self.assets_dir = Path(config.get('assets_dir', '/etc/mclan-panel/assets'))
         try:
             assets = {p.name for p in self.assets_dir.glob('*.png')}
@@ -204,6 +209,7 @@ class App:
         if method == 'GET' and (asset := self.static(path)):
             return asset
         api = path.startswith('/api/')
+        self.local.fetch = headers.get('X-Requested-With') == 'fetch'
         form = {}
         if body and not api:
             form = {k: v[0] for k, v in parse_qs(body.decode('utf-8', 'replace'), keep_blank_values=True).items()}
@@ -317,6 +323,9 @@ class App:
                 return self.json({'error': 'invalid JSON'}, 400)
             if path == '/api/console' and isinstance(payload, dict) and isinstance(payload.get('command'), str):
                 return self.json(self.helper(['console', payload['command']], timeout=30))
+            if (match := re.fullmatch(r'/api/job/([0-9a-f]{12})/seen', path)) and match[1] in self.jobs.items:
+                self.jobs.items[match[1]]['seen'] = True
+                return self.json({'ok': True})
             return self.json({'error': 'not found'}, 404)
         if path == '/api/upload-check':
             size = query.get('size', ['0'])[0]
@@ -327,12 +336,14 @@ class App:
         if path == '/api/console':
             lines = query.get('lines', ['200'])[0]
             return self.json(self.helper(['logs', lines if lines in ('100', '200', '500') else '200'], timeout=30))
+        if path == '/api/jobs':
+            return self.json({'jobs': [self.job_summary(job) for job in
+                                       sorted(self.jobs.items.values(), key=lambda j: -j['started'])]})
         if match := re.fullmatch(r'/api/job/([0-9a-f]{12})', path):
             job = self.jobs.items.get(match[1])
             if not job:
                 return self.json({'error': 'not found'}, 404)
-            return self.json({'state': job['state'], 'elapsed': int(time.time() - job['started']),
-                              'result': job['result'] if job['state'] == 'done' else None})
+            return self.json({**self.job_summary(job), 'result': job['result'] if job['state'] == 'done' else None})
         return self.json({'error': 'not found'}, 404)
 
     def login(self, method, form, ip):
@@ -400,11 +411,23 @@ class App:
             return f'{base}#world:{spawn[0]}:{spawn[1]}:{spawn[2]}:150:0:0:0:0:perspective'
         return base
 
+    @staticmethod
+    def job_summary(job):
+        result = job['result'] or {}
+        return {'id': job['id'], 'label': job['label'], 'state': job['state'], 'seen': job['seen'],
+                'elapsed': int((job['finished'] or time.time()) - job['started']),
+                'ok': bool(result.get('ok')) if job['state'] == 'done' else None}
+
     def run_job(self, session, label, argv, back='/'):
         identifier = self.jobs.start(label, argv)
+        fetch = getattr(self.local, 'fetch', False)
         if not identifier:
+            if fetch:
+                return self.json({'error': 'Another operation is still running. Wait for it to finish.'}, 409)
             self.flash(session, 'bad', 'Another operation is still running. Wait for it to finish.')
             return 303, {'Location': back}, b''
+        if fetch:
+            return self.json({'job': identifier, 'label': label}, 202)
         return 303, {'Location': f'/job/{identifier}'}, b''
 
     def dashboard(self, session, form, query):

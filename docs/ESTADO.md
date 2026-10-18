@@ -261,3 +261,26 @@ Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa
 
 - Importar desde `imports/` un mundo Java y otro Bedrock, y exportar a `.mcworld`, con archivos reales del usuario.
 - Rotación de backups: cada cambio de mundo añade un backup `pre-switch` de unos 330 MB.
+
+## Panel 0.6.1: subida web y avisos de tareas (19-10-2026)
+
+**Implementado (con pruebas automatizadas, 127 en total):**
+
+- **Subida desde el navegador** a `imports/` en streaming, con comprobación previa (`/api/upload-check`) de nombre, tamaño, espacio y bloqueo. La importación arranca al terminar la subida.
+- **Avisos de tareas en segundo plano**, a petición del operador: las operaciones largas ya no navegan a una página de tarea.
+  - Con JavaScript, el formulario se envía con `fetch` y el servidor responde 202 con el id de la tarea (409 si ya hay otra en marcha).
+  - La bandeja de la cabecera consulta `GET /api/jobs` (cada 3 s con algo en marcha y cada 20 s si no). Avisa con un toast al terminar y lleva un contador de no leídas.
+  - Al pulsar se abre un diálogo con el resultado (`GET /api/job/<id>`) y la tarea se marca como vista (`POST /api/job/<id>/seen`, con CSRF).
+  - Sin JavaScript se mantiene la redirección a `/job/<id>`.
+  - Los avisos salen abajo a la derecha, encima de la barra de objetos, y en móvil ocupan todo el ancho.
+- **Verificado en la vista previa local** (Chromium vía CDP, escritorio y 390 px): sin navegación, aviso «started», bandeja ocupada, aviso «done!», contador a 1, diálogo con el resultado y contador a 0 al abrirlo.
+
+**Skins de Bedrock (diagnóstico, sin cambio de código):**
+
+- La API de GeyserMC tiene la skin correcta del jugador Bedrock (subida el 18-10-2026 a las 22:39).
+- Floodgate muestra una skin Java por defecto hasta que la subida termina, lo que puede tardar minutos. La skin se aplica al volver a conectar.
+- Pendiente: confirmar con el operador tras reconectar. Si persiste, activar el modo de depuración de Geyser.
+
+### Pendiente
+
+- Subida web de punta a punta en la Pi con un archivo real (implementada y probada con pruebas automatizadas; falta verificarla en hardware).

@@ -74,10 +74,126 @@
     (next.querySelector('a, button') || next).focus();
   }, { passive: false });
 
-  // --- Confirmaciones, copiar direcciones, avisos -----------------------------------------
+  // --- Avisos y tareas en segundo plano -------------------------------------------------
+  function toast(kind, title, text, onClick) {
+    let box = $('.toasts');
+    if (!box) { box = document.createElement('div'); box.className = 'toasts'; document.body.append(box); }
+    const item = document.createElement(onClick ? 'button' : 'div');
+    item.className = `toast ${kind}${onClick ? ' clickable' : ''}`;
+    item.setAttribute('role', 'status');
+    const strong = document.createElement('strong');
+    strong.textContent = title;
+    const span = document.createElement('span');
+    span.textContent = text;
+    item.append(strong, span);
+    if (onClick) item.addEventListener('click', () => { item.remove(); onClick(); });
+    box.append(item);
+    setTimeout(() => item.classList.add('hide'), onClick ? 12000 : 7000);
+    setTimeout(() => item.remove(), onClick ? 12600 : 7600);
+  }
+  const known = new Map();  // id → estado ya mostrado, para avisar sólo de los cambios
+  let trayTimer = null;
+  function openDialog(title, nodes) {
+    const dialog = $('[data-jobs-dialog]');
+    if (!dialog) return;
+    $('[data-dialog-title]', dialog).textContent = title;
+    $('[data-dialog-body]', dialog).replaceChildren(...nodes);
+    if (!dialog.open) dialog.showModal();
+  }
+  async function showJob(id) {
+    const job = await getJSON(`/api/job/${id}`);
+    const state = document.createElement('p');
+    const pill = document.createElement('span');
+    pill.className = `pill ${job.state !== 'done' ? 'warn' : job.ok ? 'ok' : 'bad'}`;
+    pill.textContent = job.state !== 'done' ? `Running · ${job.elapsed} s` : job.ok ? `Finished in ${job.elapsed} s` : 'Failed';
+    state.append(pill);
+    const output = document.createElement('pre');
+    output.className = 'output';
+    output.textContent = job.result ? job.result.output || '(no output)' : 'Still running… the result will appear here.';
+    const reload = document.createElement('button');
+    reload.type = 'button'; reload.className = 'mc-btn small'; reload.textContent = 'Reload page';
+    reload.addEventListener('click', () => location.reload());
+    openDialog(job.label, [state, output, reload]);
+    if (job.state === 'done' && !job.seen) {
+      await fetch(`/api/job/${id}/seen`, { method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf() } });
+      refreshTray();
+    }
+  }
+  function showHistory(jobs) {
+    const list = document.createElement('ul');
+    list.className = 'job-list';
+    for (const job of jobs) {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `job-entry ${job.state !== 'done' ? 'running' : job.ok ? 'ok' : 'bad'}${job.seen ? '' : ' unseen'}`;
+      button.textContent = `${job.label} — ${job.state !== 'done' ? `running ${job.elapsed} s` : job.ok ? 'finished' : 'failed'}`;
+      button.addEventListener('click', () => showJob(job.id));
+      item.append(button);
+      list.append(item);
+    }
+    openDialog('Operations', jobs.length ? [list] : [Object.assign(document.createElement('p'), { textContent: 'No operations yet.' })]);
+  }
+  async function refreshTray() {
+    const tray = $('[data-tray]');
+    if (!tray) return;
+    let jobs;
+    try { jobs = (await getJSON('/api/jobs')).jobs || []; } catch { return; }
+    const running = jobs.filter((j) => j.state === 'running');
+    const unseen = jobs.filter((j) => j.state === 'done' && !j.seen);
+    tray.hidden = !jobs.length;
+    tray.classList.toggle('busy', running.length > 0);
+    $('.tray-text', tray).textContent = running.length ? `${running[0].label}…` : 'Jobs';
+    const badge = $('.badge-count', tray);
+    badge.hidden = !unseen.length;
+    badge.textContent = String(unseen.length);
+    badge.classList.toggle('bad', unseen.some((j) => !j.ok));
+    for (const job of jobs) {
+      const previous = known.get(job.id);
+      if (previous === 'running' && job.state === 'done') {
+        toast(job.ok ? 'ok' : 'bad', job.ok ? `${job.label}: done!` : `${job.label}: failed`, 'Click to see the result.',
+              () => showJob(job.id));
+      }
+      known.set(job.id, job.state);
+    }
+    tray.onclick = () => showHistory(jobs);
+    clearTimeout(trayTimer);
+    trayTimer = setTimeout(refreshTray, running.length ? 3000 : 20000);
+  }
+  async function submitAsync(form) {
+    const body = new URLSearchParams(new FormData(form));
+    const buttons = $$('button', form);
+    buttons.forEach((b) => { b.disabled = true; });
+    try {
+      const response = await fetch(form.action, { method: 'POST', credentials: 'same-origin', body,
+        headers: { 'X-Requested-With': 'fetch', 'Content-Type': 'application/x-www-form-urlencoded' } });
+      const reply = await response.json().catch(() => ({}));
+      if (response.status === 202 && reply.job) {
+        known.set(reply.job, 'running');
+        toast('warn', `${reply.label}: started`, 'Keep browsing — you will be notified when it finishes.', () => showJob(reply.job));
+        refreshTray();
+      } else {
+        toast('bad', 'Could not start', reply.error || `HTTP ${response.status}`);
+      }
+    } catch {
+      toast('bad', 'Could not start', 'The panel could not be reached.');
+    } finally {
+      buttons.forEach((b) => { b.disabled = false; });
+    }
+  }
+
+  // --- Confirmaciones, copiar direcciones -------------------------------------------------
   document.addEventListener('submit', (event) => {
-    const message = event.target.dataset.confirm;
-    if (message && !confirm(message)) event.preventDefault();
+    const form = event.target;
+    const message = form.dataset.confirm;
+    if (message && !confirm(message)) { event.preventDefault(); return; }
+    if (form.hasAttribute('data-async') && $('[data-tray]')) {
+      event.preventDefault();
+      submitAsync(form);
+    }
+  });
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('[data-dialog-close]')) event.target.closest('dialog').close();
   });
   document.addEventListener('click', async (event) => {
     const code = event.target.closest('code.copy');
@@ -261,9 +377,11 @@
         let reply = {};
         try { reply = JSON.parse(request.responseText); } catch { /* respuesta no JSON */ }
         if (request.status === 200 && reply.ok) {
-          status.textContent = 'Uploaded. Starting the import…';
+          status.textContent = 'Uploaded. The import runs in the background.';
           form.elements.file.value = reply.name;
-          form.submit();  // POST normal: crea la tarea de importación
+          button.disabled = false;
+          bar.hidden = true;
+          submitAsync(form);  // crea la tarea de importación sin salir de la página
         } else {
           status.textContent = `Upload failed: ${reply.error || request.status}`;
           button.disabled = false;
@@ -297,4 +415,5 @@
     onScroll();
   }
   init(document);
+  refreshTray();
 })();

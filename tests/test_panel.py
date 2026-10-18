@@ -821,6 +821,41 @@ class PanelAppTests(unittest.TestCase):
                 httpd.shutdown()
                 httpd.server_close()
 
+    def test_background_jobs_notify_instead_of_redirecting(self):
+        cookie, csrf = self.login()
+        release = threading.Event()
+        self.app.jobs.runner = lambda argv, timeout=60: (release.wait(5), {'ok': True, 'output': 'backup ok'})[1]
+        headers = {'Host': '192.168.1.50:8443', 'Cookie': cookie, 'X-Requested-With': 'fetch'}
+        code, kind, payload = self.app.handle('POST', '/action', headers, f'do=backup&csrf={csrf}'.encode(), '192.168.1.9')
+        self.assertEqual(code, 202)
+        job = json.loads(payload)['job']
+        code, _, payload = self.app.handle('POST', '/action', headers, f'do=restart&csrf={csrf}'.encode(), '192.168.1.9')
+        self.assertEqual((code, 'still running' in json.loads(payload)['error']), (409, True))
+        jobs = json.loads(self.request('GET', '/api/jobs', cookie=cookie)[2])['jobs']
+        self.assertEqual((jobs[0]['id'], jobs[0]['state'], jobs[0]['ok']), (job, 'running', None))
+        release.set()
+        for _ in range(50):
+            if not self.app.jobs.busy():
+                break
+            time.sleep(0.05)
+        entry = json.loads(self.request('GET', f'/api/job/{job}', cookie=cookie)[2])
+        self.assertEqual((entry['state'], entry['ok'], entry['seen'], entry['result']['output']), ('done', True, False, 'backup ok'))
+        api = {'Host': '192.168.1.50:8443', 'Cookie': cookie}
+        self.assertEqual(self.app.handle('POST', f'/api/job/{job}/seen', api, b'', '192.168.1.9')[0], 403)
+        self.assertEqual(self.app.handle('POST', f'/api/job/{job}/seen', dict(api, **{'X-CSRF-Token': csrf}), b'', '192.168.1.9')[0], 200)
+        self.assertTrue(json.loads(self.request('GET', '/api/jobs', cookie=cookie)[2])['jobs'][0]['seen'])
+        # Sin JavaScript sigue la redirección a la página de la tarea.
+        self.assertTrue(self.request('POST', '/action', f'do=backup&csrf={csrf}', cookie)[1]['Location'].startswith('/job/'))
+
+    def test_long_operations_are_marked_async_in_pages(self):
+        cookie, _ = self.login()
+        backups = self.request('GET', '/backups', cookie=cookie)[2].decode()
+        self.assertRegex(backups, r'<form class="inline" method="post" action="/action" data-async>')
+        self.assertIn('data-tray', backups)
+        self.assertIn('data-jobs-dialog', backups)
+        world = self.request('GET', '/world', cookie=cookie)[2].decode()
+        self.assertIn('action="/world" data-async data-confirm="Save and restart', world)
+
     def test_logout_ends_session(self):
         cookie, csrf = self.login()
         self.request('POST', '/logout', f'csrf={csrf}', cookie)
