@@ -58,7 +58,8 @@ class HelperValidationTests(unittest.TestCase):
                      ['whitelist-add', 'other', 'Steve'], ['whitelist-add', 'xuid', '0123'],
                      ['whitelist-remove', 'Steve extra'], ['whitelist', 'maybe'], ['logs', '5000'],
                      ['logs', '-1'], ['command', 'op', 'Steve'], ['stop', 'now'], [],
-                     ['whitelist-open-for', 'Steve', '60'], ['whitelist-open-for', 'a b', '5']):
+                     ['whitelist-open-for', 'bedrock', 'Steve', '60'], ['whitelist-open-for', 'bedrock', 'a b', '5'],
+                     ['whitelist-open-for', 'Steve', '5'], ['whitelist-open-for', 'xuid', '123', '5']):
             with self.subTest(argv=argv), self.assertRaises(ValueError):
                 helper.parse(argv)
 
@@ -99,27 +100,34 @@ class HelperValidationTests(unittest.TestCase):
         self.assertEqual(helper.bluemap_render('BlueMap Status >\n ✔ 1 render-thread is idle'), 'idle')
         self.assertEqual(helper.bluemap_render('Render-Threads are STOPPED!'), 'paused')
         with tempfile.TemporaryDirectory() as directory:
-            level = Path(directory) / 'level.dat'
+            data = Path(directory) / 'data'
+            (data / 'world').mkdir(parents=True)
             payload = b'\x0a\x00\x00\x0a\x00\x05spawn' + b'\x0b\x00\x03pos' + struct.pack('>iiii', 3, -32, 64, 0)
-            with gzip.open(level, 'wb') as stream:
+            with gzip.open(data / 'world/level.dat', 'wb') as stream:
                 stream.write(payload)
-            self.assertEqual(helper.world_spawn(level), [-32, 64, 0])
-            link = Path(directory) / 'link.dat'
-            link.symlink_to(level)
-            self.assertIsNone(helper.world_spawn(link))
-            self.assertIsNone(helper.world_spawn(Path(directory) / 'missing.dat'))
+            self.assertEqual(helper.world_spawn(data), [-32, 64, 0])
+            (data / 'world').rename(data / 'real')
+            (data / 'world').symlink_to(data / 'real', target_is_directory=True)
+            self.assertIsNone(helper.world_spawn(data))
+            self.assertIsNone(helper.world_spawn(Path(directory) / 'missing'))
 
     def test_floodgate_uuid_from_xuid(self):
         self.assertEqual(helper.floodgate_uuid('2535412345678901'), '00000000-0000-0000-0009-01f1b0392c35')
 
     def test_rejected_attempts_from_real_and_java_log_lines(self):
-        log = ('[16:29:04 INFO]: [Geyser-Spigot] Xeministrator has disconnected from the Java server because of '
-               '§rYou are not whitelisted on this server!\n'
-               '[16:29:04 INFO]: Disconnecting /192.168.2.100:0: You are not whitelisted on this server!\n'
-               '[16:49:36 INFO]: [Geyser-Spigot] Xeministrator has disconnected from the Java server because of '
-               '§rYou are not whitelisted on this server!\n'
-               '[17:00:00 INFO]: Disconnecting Steve (/192.168.2.20:51234): You are not white-listed on this server!\n'
-               '[17:01:00 INFO]: Alex (/192.168.2.21:50000) lost connection: You are not whitelisted on this server!\n')
+        # Formato real de data/logs/latest.log (Paper 26.3), más dos líneas Java del mismo formato.
+        log = ('[16:29:04] [localSession-7-2/INFO]: [Geyser-Spigot] Xeministrator has disconnected from the Java '
+               'server because of §rYou are not whitelisted on this server!\n'
+               '[16:29:04] [Server thread/INFO]: Disconnecting /192.168.2.100:0: You are not whitelisted on this server!\n'
+               '[16:49:36] [localSession-9-2/INFO]: [Geyser-Spigot] Xeministrator has disconnected from the Java '
+               'server because of §rYou are not whitelisted on this server!\n'
+               '[17:00:00] [Server thread/INFO]: Disconnecting Steve (/192.168.2.20:51234): You are not white-listed on this server!\n'
+               '[17:01:00] [Server thread/INFO]: Alex (/192.168.2.21:50000) lost connection: You are not whitelisted on this server!\n'
+               # Un jugador admitido escribe en el chat el texto de un rechazo: no debe aparecer.
+               '[17:02:00] [Async Chat Thread - #0/INFO]: <Steve> [Geyser-Spigot] Intruso has disconnected from the '
+               'Java server because of §rYou are not whitelisted on this server!\n'
+               '[17:03:00] [Async Chat Thread - #0/INFO]: <Steve> Mallory (/1.2.3.4:5) lost connection: You are not '
+               'whitelisted on this server!\n')
         found = helper.rejected_attempts(log, set())
         self.assertEqual([(r['edition'], r['name'], r['last_seen']) for r in found],
                          [('bedrock', 'Xeministrator', '16:49:36'), ('java', 'Steve', '17:00:00'), ('java', 'Alex', '17:01:00')])
@@ -137,6 +145,7 @@ class HelperValidationTests(unittest.TestCase):
             (logs / 'latest.log').write_text('[18:00:00] [Server thread/INFO]: Done (25.8s)!\n')
             panel = helper.Panel.__new__(helper.Panel)
             panel.runtime = Mock(data=Path(directory) / 'data')
+            (logs / 'evil.log.gz').symlink_to(logs / '2026-10-18-1.log.gz')
             found = helper.rejected_attempts(panel.paper_logs(), set())
             self.assertEqual([(r['name'], r['last_seen']) for r in found], [('Xeministrator', '16:29:04')])
 
@@ -148,7 +157,7 @@ class HelperValidationTests(unittest.TestCase):
             panel = helper.Panel.__new__(helper.Panel)
             panel.runtime = Mock(data=data)
             panel.runtime.running.return_value = True
-            with patch.object(helper.os, 'chown'):
+            with patch.object(helper.os, 'fchown'):
                 result = panel.set_properties({'difficulty': 'hard'})
             self.assertTrue(result['ok'])
             self.assertIn('difficulty=hard', (data / 'server.properties').read_text())
@@ -156,24 +165,80 @@ class HelperValidationTests(unittest.TestCase):
             panel.runtime.start.assert_called_once()
             panel.runtime.running.return_value = False
             panel.runtime.start.reset_mock()
-            with patch.object(helper.os, 'chown'):
+            with patch.object(helper.os, 'fchown'):
                 panel.set_properties({'difficulty': 'easy'})
             panel.runtime.start.assert_not_called()
 
     def test_open_for_always_reenables_whitelist(self):
         panel = helper.Panel.__new__(helper.Panel)
         panel.rcon = Mock(return_value='')
-        panel.server_log = Mock(side_effect=RuntimeError('docker caído'))
+        panel.whitelist = Mock(return_value=[])
+        failures = iter([RuntimeError('docker caído')])
+        def flaky(since=None):
+            error = next(failures, None)
+            if error:
+                raise error
+            return ''
+        panel.server_log = Mock(side_effect=flaky)
         with self.assertRaises(RuntimeError):
-            panel.open_for('Alguien', 1)
-        self.assertEqual(panel.rcon.call_args_list[0].args, ('whitelist', 'off'))
-        self.assertEqual(panel.rcon.call_args_list[-1].args, ('whitelist', 'on'))
-        panel.rcon.reset_mock()
-        panel.server_log = Mock(return_value='[17:00:00 INFO]: .Alguien[/192.168.2.100:0] logged in with entity id 7')
-        result = panel.open_for('Alguien', 1)
+            panel.open_for('bedrock', 'Alguien', 1)
+        calls = [c.args for c in panel.rcon.call_args_list]
+        self.assertEqual(calls[0], ('whitelist', 'off'))
+        self.assertIn(('whitelist', 'on'), calls)
+
+    def test_open_for_admits_only_the_chosen_edition_and_kicks_others(self):
+        panel = helper.Panel.__new__(helper.Panel)
+        panel.rcon = Mock(return_value='')
+        log = ('[17:00:00 INFO]: Alguien[/192.168.2.50:5000] logged in with entity id 6\n'
+               '[17:00:01 INFO]: .Alguien[/192.168.2.100:0] logged in with entity id 7\n'
+               '[17:00:02 INFO]: <Steve> .Fake[/1.1.1.1:1] logged in with entity id 9\n')
+        panel.server_log = Mock(return_value=log)
+        panel.whitelist = Mock(return_value=[{'name': '.Alguien', 'uuid': '00000000-0000-0000-0009-01f1b0392c35'}])
+        result = panel.open_for('bedrock', 'Alguien', 1)
         self.assertTrue(result['ok'])
-        self.assertIn(('whitelist', 'add', '.Alguien'), [c.args for c in panel.rcon.call_args_list])
-        self.assertEqual(panel.rcon.call_args_list[-1].args, ('whitelist', 'on'))
+        calls = [c.args for c in panel.rcon.call_args_list]
+        self.assertIn(('whitelist', 'add', '.Alguien'), calls)
+        self.assertNotIn(('whitelist', 'add', 'Alguien'), calls)
+        self.assertIn(('kick', 'Alguien', 'Whitelist reactivada'), calls)
+        self.assertNotIn(('kick', '.Fake', 'Whitelist reactivada'), calls)
+        self.assertLess(calls.index(('whitelist', 'on')), calls.index(('kick', 'Alguien', 'Whitelist reactivada')))
+
+    def test_data_access_never_follows_links_or_special_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory) / 'data'
+            (data / 'logs').mkdir(parents=True)
+            secret = Path(directory) / 'secret'
+            secret.write_text('root-only')
+            (data / 'server.properties').symlink_to(secret)
+            with self.assertRaises(OSError):
+                helper.read_data(data, 'server.properties', 100)
+            (data / 'server.properties').unlink()
+            (data / 'server.properties').write_text('a=1\n')
+            os_module = helper.os
+            os_module.mkfifo(data / 'fifo')
+            with self.assertRaises(OSError):
+                helper.read_data(data, 'fifo', 100)
+            (data / 'outside').symlink_to(Path(directory), target_is_directory=True)
+            with self.assertRaises(OSError):
+                helper.read_data(data, 'outside/secret', 100)
+            self.assertEqual(helper.read_data(data, 'server.properties', 2, tail=True), b'1\n')
+            # Escritura: sustituye un enlace por un archivo propio sin tocar su destino.
+            (data / 'server.properties').unlink()
+            (data / 'server.properties').symlink_to(secret)
+            with patch.object(helper.os, 'fchown'):
+                helper.write_data(data, 'server.properties', 'b=2\n')
+            self.assertEqual(secret.read_text(), 'root-only')
+            self.assertFalse((data / 'server.properties').is_symlink())
+            self.assertEqual((data / 'server.properties').read_text(), 'b=2\n')
+
+    def test_malformed_whitelist_is_an_error_not_a_crash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            panel = helper.Panel.__new__(helper.Panel)
+            panel.runtime = Mock(data=Path(directory))
+            self.assertEqual(panel.whitelist(), [])
+            (Path(directory) / 'whitelist.json').write_text('{"name": "x"}')
+            with self.assertRaises(helper.Error):
+                panel.whitelist()
 
 
 class PanelNetworkTests(unittest.TestCase):
@@ -211,6 +276,21 @@ class PanelNetworkTests(unittest.TestCase):
             reply = sock.recv(4096).decode()
         self.assertTrue(reply.startswith('HTTP/1.1 301'))
         self.assertIn(f'Location: https://127.0.0.1:{self.port}/', reply)
+
+    def test_connections_per_ip_are_capped(self):
+        import socket
+        idle = [socket.create_connection(('127.0.0.1', self.port), timeout=5) for _ in range(server.MAX_CONNECTIONS_PER_IP)]
+        try:
+            time.sleep(0.2)
+            extra = socket.create_connection(('127.0.0.1', self.port), timeout=5)
+            self.assertEqual(extra.recv(10), b'')  # cerrada por el servidor
+            extra.close()
+        finally:
+            for sock in idle:
+                sock.close()
+        time.sleep(0.3)
+        with urlopen(f'https://127.0.0.1:{self.port}/login', context=self.client, timeout=5) as response:
+            self.assertEqual(response.status, 200)
 
     def test_silent_client_does_not_block_other_users(self):
         import socket
@@ -286,6 +366,19 @@ class PanelAppTests(unittest.TestCase):
             time.sleep(0.02)
         self.assertEqual(self.app.jobs.runner.call_args.args[0], ['plugin', 'bluemap', 'off'])
         self.assertEqual(self.request('POST', '/modulos', f'csrf={csrf}&do=plugin&value=rm', cookie)[0], 400)
+
+    def test_login_requires_same_origin_and_concurrent_attempts_respect_limit(self):
+        self.assertEqual(self.request('POST', '/login', 'password=x', origin='https://evil.example')[0], 403)
+        results = []
+        def attempt():
+            results.append(self.request('POST', '/login', 'password=mal', ip='192.168.1.77')[0])
+        threads = [threading.Thread(target=attempt) for _ in range(20)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(results.count(200), server.MAX_FAILURES)
+        self.assertEqual(results.count(429), 20 - server.MAX_FAILURES)
 
     def test_wrong_passwords_are_throttled(self):
         for _ in range(server.MAX_FAILURES):
@@ -388,6 +481,11 @@ class PanelAppTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as caught:
                 urlopen(Request(f'{base}/login', data=b'x' * (server.MAX_BODY + 1)))
             self.assertEqual(caught.exception.code, 413)
+            import socket
+            for header in (b'Content-Length: -1', b'Transfer-Encoding: chunked', b'Content-Length: 1e3'):
+                with socket.create_connection(httpd.server_address, timeout=5) as sock:
+                    sock.sendall(b'POST /login HTTP/1.1\r\nHost: 127.0.0.1\r\n' + header + b'\r\n\r\n')
+                    self.assertIn(b' 400 ', sock.recv(200), header)
         finally:
             httpd.shutdown()
             httpd.server_close()

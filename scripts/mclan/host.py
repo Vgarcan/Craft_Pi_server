@@ -32,9 +32,12 @@ def lan_ip(requested='auto'):
             address = ipaddress.IPv4Address(requested)
         except ipaddress.AddressValueError as exc:
             raise Error('LAN_IP debe ser una IPv4 local.') from exc
-        if str(address) not in addresses or address.is_loopback or address.is_link_local:
+        if (str(address) not in addresses or address.is_loopback or address.is_link_local
+                or not address.is_private):
             raise Error('La IP indicada no está asignada a una interfaz LAN de este host.')
         return str(address)
+    # Sólo direcciones privadas: una IP pública o de VPN publicaría el servidor fuera de la LAN.
+    addresses = [a for a in addresses if ipaddress.IPv4Address(a).is_private]
     if len(addresses) != 1:
         raise Error(f'No se puede elegir una única IP LAN ({addresses}). Usa --lan-ip DIRECCION.')
     return addresses[0]

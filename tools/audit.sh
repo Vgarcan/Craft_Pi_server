@@ -106,7 +106,7 @@ attention="$(./manage.sh status 2>/dev/null | grep 'ATENCIÓN' || true)"
 if [[ -z $attention ]]; then ok 'manage.sh status sin avisos'
 else while read -r line; do warn "${line#ATENCIÓN: }"; done <<<"$attention"; fi
 whitelist="$(sed -n 's/^white-list=//p' data/server.properties)"
-entries="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' data/whitelist.json)"
+entries="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' data/whitelist.json 2>/dev/null || echo 0)"
 if [[ $whitelist == true && $entries == 0 ]]; then warn 'Whitelist activa y vacía: nadie puede entrar'
 else ok "white-list=$whitelist, $entries jugador(es) en whitelist.json"; fi
 
@@ -124,7 +124,7 @@ free_gib="$(df -BG --output=avail . | tail -1 | tr -dc 0-9)"
 expect fail "Disco libre ${free_gib} GiB" "Disco libre ${free_gib} GiB (<8)" test "$free_gib" -ge 8
 
 section 'Backups'
-latest="$(find backups -maxdepth 1 -name '*.tar.gz' -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)"
+latest="$(find backups -maxdepth 1 -name '*.tar.gz' -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2- || true)"
 if [[ -z $latest ]]; then warn 'No hay backups gestionados'
 else
     age=$(( ($(date +%s) - $(stat -c %Y "$latest")) / 86400 ))

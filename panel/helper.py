@@ -12,6 +12,8 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
+import struct
 import subprocess
 import sys
 import time
@@ -21,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 
 from mclan import cli, host  # noqa: E402
-from mclan.common import Error, LOG, atomic_write, read_json, run  # noqa: E402
+from mclan.common import Error, LOG, run  # noqa: E402
 from mclan.runtime import Runtime  # noqa: E402
 
 CONTAINER = 'minecraft-lan-minecraft-1'
@@ -32,6 +34,77 @@ GAMERTAG = re.compile(r'[A-Za-z0-9_]{1,16}')
 BEDROCK_NAME = re.compile(r'\.[A-Za-z0-9_]{1,16}')
 XUID = re.compile(r'[1-9][0-9]{0,19}')
 COLOR = re.compile('§.')
+DATA_UID = 10000
+DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+# --- Acceso a data/ ---------------------------------------------------------------------------
+# data/ pertenece al usuario del contenedor (UID 10000): un plugin o servidor comprometido puede
+# sustituir cualquier archivo o carpeta por un enlace, un FIFO o algo enorme. El helper es root, así
+# que nunca sigue enlaces en ningún componente de la ruta, sólo lee archivos regulares y con tope.
+
+def open_folder(data, relative='.'):
+    descriptor = os.open(data, DIRECTORY)
+    try:
+        for part in Path(relative).parts:
+            if part != '.':
+                child = os.open(part, DIRECTORY, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = child
+        return descriptor
+    except OSError:
+        os.close(descriptor)
+        raise
+
+
+def open_regular(folder_fd, name):
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder_fd)
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise OSError(f'{name} no es un archivo regular')
+    return descriptor
+
+
+def read_data(data, relative, limit, *, tail=False):
+    """Contenido de data/<relative>; con tail=True, sólo los últimos `limit` bytes."""
+    path = Path(relative)
+    folder = open_folder(data, path.parent)
+    try:
+        descriptor = open_regular(folder, path.name)
+    finally:
+        os.close(folder)
+    with os.fdopen(descriptor, 'rb') as stream:
+        size = os.fstat(stream.fileno()).st_size
+        if tail and size > limit:
+            stream.seek(size - limit)
+        return stream.read(limit)
+
+
+def write_data(data, relative, content):
+    """Reemplazo atómico dentro de data/ sin seguir enlaces; el archivo queda para UID 10000."""
+    path = Path(relative)
+    folder = open_folder(data, path.parent)
+    temporary = f'.{path.name}.mclan-new'
+    try:
+        try:
+            os.unlink(temporary, dir_fd=folder)
+        except FileNotFoundError:
+            pass
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=folder)
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(content.encode())
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.fchown(stream.fileno(), DATA_UID, DATA_UID)
+        os.rename(temporary, path.name, src_dir_fd=folder, dst_dir_fd=folder)
+    finally:
+        os.close(folder)
+
+
+def read_gzip_data(folder_fd, name, limit):
+    descriptor = open_regular(folder_fd, name)
+    with os.fdopen(descriptor, 'rb') as raw, gzip.GzipFile(fileobj=raw) as stream:
+        return stream.read(limit)
 
 
 def choice(*options):
@@ -135,12 +208,19 @@ def floodgate_uuid(xuid):
     return str(uuid.UUID(int=int(xuid)))
 
 
+# Anclados al prefijo de línea de Paper ("[HH:MM:SS] [hilo/INFO]: "): un jugador no puede fabricar
+# una entrada escribiendo ese texto en el chat, porque esas líneas empiezan por "<Nombre> ".
+LINE = r'^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] \[[^\]\n]+/INFO\]: '
 REJECTED = [
-    ('bedrock', re.compile(r'\[Geyser-Spigot\] ([A-Za-z0-9_ ]{1,16}) has disconnected from the Java server '
-                           r'because of .*not white-?listed')),
-    ('java', re.compile(r'Disconnecting ([A-Za-z0-9_]{3,16}) \(/[^)]*\): You are not white-?listed')),
-    ('java', re.compile(r'([A-Za-z0-9_]{3,16}) \(/[^)]*\) lost connection: You are not white-?listed')),
+    ('bedrock', re.compile(LINE + r'\[Geyser-Spigot\] ([A-Za-z0-9_ ]{1,16}) has disconnected from the Java server '
+                           r'because of (?:§r)?You are not white-?listed on this server!$')),
+    ('java', re.compile(LINE + r'Disconnecting ([A-Za-z0-9_]{3,16}) \(/[0-9a-fA-F.:\[\]]+\): '
+                        r'You are not white-?listed on this server!$')),
+    ('java', re.compile(LINE + r'([A-Za-z0-9_]{3,16}) \(/[0-9a-fA-F.:\[\]]+\) lost connection: '
+                        r'You are not white-?listed on this server!$')),
 ]
+# Entrada de un jugador en el log de Docker ("[HH:MM:SS INFO]: Nombre[/ip:puerto] logged in ...").
+JOINED = re.compile(r'^\[[0-9:]{8} INFO\]: (\.?[A-Za-z0-9_]{1,16})\[/[^\]\n]*\] logged in with entity id [0-9]+', re.M)
 
 
 def rejected_attempts(log, whitelisted):
@@ -168,18 +248,19 @@ def container_memory(container_id):
         return None
 
 
-def world_spawn(level_dat):
+def world_spawn(data_dir):
     """Spawn del mundo (int array 'pos' de level.dat, formato 26.x) para centrar el mapa; None si no se lee."""
-    import struct
     try:
-        fd = os.open(level_dat, os.O_RDONLY | os.O_NOFOLLOW)
-        with gzip.open(os.fdopen(fd, 'rb')) as stream:
-            data = stream.read(1024**2)
+        folder = open_folder(data_dir, 'world')
+        try:
+            data = read_gzip_data(folder, 'level.dat', 1024**2)
+        finally:
+            os.close(folder)
         index = data.find(b'\x0b\x00\x03pos')
         if index < 0 or struct.unpack('>i', data[index + 6:index + 10])[0] != 3:
             return None
         return list(struct.unpack('>iii', data[index + 10:index + 22]))
-    except (OSError, EOFError, struct.error, ValueError):
+    except (OSError, EOFError, struct.error, ValueError, gzip.BadGzipFile):
         return None
 
 
@@ -219,31 +300,46 @@ class Panel:
     def paper_logs(self, hours=72, archives=40):
         """Logs de Paper en data/logs: sobreviven a recrear el contenedor, a diferencia de docker logs.
         Paper rota el archivo en cada arranque, así que se lee una ventana de tiempo, no un número fijo."""
-        folder = self.runtime.data / 'logs'
         cutoff = time.time() - hours * 3600
-        older = [p for p in sorted(folder.glob('*.log.gz'), key=lambda p: p.stat().st_mtime)
-                 if p.stat().st_mtime >= cutoff][-archives:]
+        try:
+            folder = open_folder(self.runtime.data, 'logs')
+        except OSError:
+            return ''
         parts = []
-        for path in older:
+        try:
+            entries = [(entry.stat(follow_symlinks=False).st_mtime, entry.name) for entry in os.scandir(folder)
+                       if entry.name.endswith('.log.gz') and entry.is_file(follow_symlinks=False)]
+            for mtime, name in sorted(entries)[-archives:]:
+                if mtime >= cutoff:
+                    try:
+                        parts.append(read_gzip_data(folder, name, 4 * 1024**2).decode(errors='replace'))
+                    except (OSError, EOFError, gzip.BadGzipFile):
+                        continue
             try:
-                with gzip.open(path, 'rt', errors='replace') as stream:
-                    parts.append(stream.read(8 * 1024**2))
-            except (OSError, EOFError):
-                continue
-        if (folder / 'latest.log').exists():
-            parts.append((folder / 'latest.log').read_text(errors='replace')[-8 * 1024**2:])
+                parts.append(read_data(self.runtime.data, 'logs/latest.log', 8 * 1024**2, tail=True).decode(errors='replace'))
+            except OSError:
+                pass
+        finally:
+            os.close(folder)
         return '\n'.join(parts)
 
     def whitelist(self):
-        path = self.runtime.data / 'whitelist.json'
-        return read_json(path) if path.exists() else []
+        try:
+            entries = json.loads(read_data(self.runtime.data, 'whitelist.json', 1024**2))
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError) as exc:
+            raise Error(f'whitelist.json no se puede leer de forma segura: {exc}') from exc
+        if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+            raise Error('whitelist.json no tiene el formato esperado.')
+        return [{'name': str(e.get('name', '')), 'uuid': str(e.get('uuid', ''))} for e in entries]
 
     def status(self):
         active = self.runtime.active()
         info = self.runtime.container()
         state = info['State'] if info else {}
         running = bool(state.get('Running'))
-        properties = read_properties((self.runtime.data / 'server.properties').read_text())
+        properties = read_properties(read_data(self.runtime.data, 'server.properties', 256 * 1024).decode(errors='replace'))
         players = None
         if running and state.get('Health', {}).get('Status') == 'healthy':
             try:
@@ -275,16 +371,15 @@ class Panel:
                           'memory': container_memory(info['Id']) if info else None},
             'players': players,
             'bluemap': bluemap,
-            'spawn': world_spawn(self.runtime.data / 'world/level.dat'),
+            'spawn': world_spawn(self.runtime.data),
             'host': {'temperature': temperature(), 'memory_limits': host.memory_limits()},
             'pending_operation': (self.runtime.state / 'operation.json').exists(),
             'project_drift': self.runtime.template_drift() or self.runtime.runtime_drift(active),
             'properties': {key: properties.get(key, '') for key in PROPERTIES} | {
                 'white-list': properties.get('white-list', 'false')},
-            'whitelist': [{'name': e.get('name'), 'uuid': e.get('uuid'),
-                           'edition': 'bedrock' if str(e.get('uuid', '')).startswith('00000000-0000-0000-') else 'java'}
+            'whitelist': [dict(e, edition='bedrock' if e['uuid'].startswith('00000000-0000-0000-') else 'java')
                           for e in whitelist],
-            'rejected': rejected_attempts(self.paper_logs(), {str(e.get('name', '')).lower() for e in whitelist}),
+            'rejected': rejected_attempts(self.paper_logs(), {e['name'].lower() for e in whitelist}),
             'backups': [{'name': p.name, 'size': p.stat().st_size, 'mtime': p.stat().st_mtime} for p in backups[:10]],
         }
 
@@ -304,8 +399,8 @@ class Panel:
         for _ in range(10):
             time.sleep(1)
             for entry in self.whitelist():
-                if target.lower() in (str(entry.get('uuid')).lower(), str(entry.get('name')).lower().lstrip('.')):
-                    return {'ok': True, 'output': f"Añadido {entry.get('name')} ({entry.get('uuid')})."}
+                if target.lower() in (entry['uuid'].lower(), entry['name'].lower().lstrip('.')):
+                    return {'ok': True, 'output': f"Añadido {entry['name']} ({entry['uuid']})."}
             errors = [line for line in self.server_log(since=since).splitlines() if '[floodgate]' in line]
             if errors:
                 return {'ok': False, 'output': COLOR.sub('', errors[-1])}
@@ -319,7 +414,7 @@ class Panel:
         return self.floodgate_add(floodgate_uuid(name))
 
     def whitelist_remove(self, name):
-        entry = next((e for e in self.whitelist() if e.get('name') == name), None)
+        entry = next((e for e in self.whitelist() if e['name'] == name), None)
         if not entry:
             return {'ok': False, 'output': 'Ese jugador no está en la whitelist.'}
         return {'ok': True, 'output': self.rcon('whitelist', 'remove', name)}
@@ -327,30 +422,33 @@ class Panel:
     def whitelist_switch(self, value):
         return {'ok': True, 'output': self.rcon('whitelist', value)}
 
-    def open_for(self, name, minutes):
-        """Abre la whitelist hasta que entre ese jugador, lo añade y la vuelve a cerrar siempre."""
-        targets = {name.lower(), '.' + name.lower()}
+    def open_for(self, edition, name, minutes):
+        """Abre la whitelist hasta que entre ese jugador de esa edición, lo añade y la vuelve a cerrar
+        siempre. Quien haya entrado en la ventana sin ser el elegido es expulsado al cerrarla."""
+        target = ('.' + name if edition == 'bedrock' else name).lower()
         since = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-        joined = re.compile(r'\]: (\.?[A-Za-z0-9_]{1,16})\[/[^\]]*\] logged in with entity id')
         self.rcon('whitelist', 'off')
         try:
             deadline = time.monotonic() + minutes * 60
             while time.monotonic() < deadline:
-                for match in joined.finditer(self.server_log(since=since)):
-                    if match[1].lower() in targets:
-                        output = self.rcon('whitelist', 'add', match[1])
-                        return {'ok': True, 'output': f'{match[1]} entró y quedó añadido. {output}'}
+                for joined in JOINED.findall(self.server_log(since=since)):
+                    if joined.lower() == target:
+                        output = self.rcon('whitelist', 'add', joined)
+                        return {'ok': True, 'output': f'{joined} entró y quedó añadido. {output}'}
                 time.sleep(3)
             return {'ok': False, 'output': f'{name} no entró en {minutes} minutos; no se añadió a nadie.'}
         finally:
             self.rcon('whitelist', 'on')
+            allowed = {entry['name'].lower() for entry in self.whitelist()}
+            for joined in set(JOINED.findall(self.server_log(since=since))):
+                if joined.lower() not in allowed:
+                    self.rcon('kick', joined, 'Whitelist reactivada')
 
     def set_properties(self, changes):
         running = self.runtime.running()
         self.runtime.stop()
-        path = self.runtime.data / 'server.properties'
-        atomic_write(path, edit_properties(path.read_text(), changes))
-        os.chown(path, 10000, 10000)
+        current = read_data(self.runtime.data, 'server.properties', 256 * 1024).decode()
+        write_data(self.runtime.data, 'server.properties', edit_properties(current, changes))
         LOG.info('Ajustes cambiados desde el panel: %s', ', '.join(sorted(changes)))
         if running:
             self.runtime.start()
@@ -402,10 +500,12 @@ def parse(argv):
         expect(1)
         return verb, [choice('on', 'off')(args[0])], True
     if verb == 'whitelist-open-for':
-        expect(2)
-        if not GAMERTAG.fullmatch(args[0]):
-            raise ValueError('nombre no válido')
-        return verb, [args[0], int(integer(1, 15)(args[1]))], True
+        expect(3)
+        edition, name, minutes = args
+        pattern = {'java': JAVA_NAME, 'bedrock': GAMERTAG}.get(edition)
+        if not pattern or not pattern.fullmatch(name):
+            raise ValueError('edición o nombre no válido')
+        return verb, [edition, name, int(integer(1, 15)(minutes))], True
     if verb == 'set-properties':
         return verb, [validate_changes(args)], True
     if verb == 'bluemap-render':

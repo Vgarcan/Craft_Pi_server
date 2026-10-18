@@ -5,6 +5,7 @@ import time
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
+from http.client import IncompleteRead
 
 from .common import Error, sha256
 
@@ -35,7 +36,7 @@ class Client:
                     if len(value) > limit:
                         raise Error("Respuesta remota demasiado grande.")
                     return value
-            except (HTTPError, URLError, TimeoutError) as exc:
+            except (HTTPError, URLError, TimeoutError, ConnectionError, IncompleteRead) as exc:
                 if isinstance(exc, HTTPError) and exc.code not in (429, 500, 502, 503, 504):
                     raise Error(f"HTTP {exc.code}: {url}") from exc
                 if attempt == 2:

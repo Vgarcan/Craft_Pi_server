@@ -45,6 +45,11 @@ def atomic_write(path: Path, content: str, mode=0o600):
             os.fsync(out.fileno())
         os.chmod(name, mode)
         os.replace(name, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
         Path(name).unlink(missing_ok=True)
 

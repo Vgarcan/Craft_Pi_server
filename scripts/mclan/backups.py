@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import tarfile
@@ -19,6 +20,24 @@ EXCLUDED = ('data/bluemap/web/maps',)
 
 def excluded(relative):
     return any(relative == prefix or relative.startswith(prefix + '/') for prefix in EXCLUDED)
+
+
+def tree(base, root):
+    """Recorrido ordenado sin entrar en las carpetas excluidas (pueden tener cientos de miles de teselas)."""
+    result = []
+    for folder, directories, files in os.walk(base, followlinks=False):
+        here = Path(folder)
+        directories[:] = sorted(d for d in directories if not excluded(str((here / d).relative_to(root))))
+        result += [here / d for d in directories] + [here / f for f in sorted(files)]
+    return sorted(result)
+
+
+def fsync_directory(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def stamp():
@@ -39,9 +58,7 @@ def snapshot(runtime, label='manual'):
     for base in paths:
         if not base.exists():
             raise Error(f'Falta un componente del backup: {base}')
-        for path in [base, *(sorted(base.rglob('*')) if base.is_dir() else [])]:
-            if excluded(str(path.relative_to(root))):
-                continue
+        for path in [base, *(tree(base, root) if base.is_dir() else [])]:
             if path.is_symlink() or not (path.is_file() or path.is_dir()):
                 raise Error('Backup cancelado: enlaces o archivos especiales en los datos.')
             if path.is_dir():
@@ -56,7 +73,7 @@ def snapshot(runtime, label='manual'):
     manifest = {"schema": 1, "active": active['id'], "created_at": stamp(),
                 "files": {str(p.relative_to(root)): {"size": p.stat().st_size, "sha256": sha256(p)} for p in files}}
     try:
-        with tarfile.open(temporary, 'w:gz', compresslevel=3) as archive:
+        with open(temporary, 'wb') as raw, tarfile.open(fileobj=raw, mode='w:gz', compresslevel=3) as archive:
             for path in [*directories, *files]:
                 archive.add(path, arcname=str(path.relative_to(root)), recursive=False)
             import io
@@ -64,12 +81,17 @@ def snapshot(runtime, label='manual'):
             info = tarfile.TarInfo('snapshot.json')
             info.size, info.mode = len(payload), 0o600
             archive.addfile(info, io.BytesIO(payload))
+            archive.close()
+            # Un corte de luz tras un update no debe dejar un backup "verificado" sólo en caché.
+            raw.flush()
+            os.fsync(raw.fileno())
         # Lectura completa y hash de cada archivo antes de dar la copia por terminada.
         with tempfile.TemporaryDirectory(prefix='validate-', dir=runtime.state) as folder:
             # validate_archive puede comprobar sin duplicar el mundo en disco.
             validate_archive(temporary, Path(folder), extract=False)
         temporary.chmod(0o600)
         temporary.replace(target)
+        fsync_directory(backup_dir)
         atomic_write(target.with_name(target.name + '.sha256'), f'{sha256(target)}  {target.name}\n')
     finally:
         temporary.unlink(missing_ok=True)
@@ -177,9 +199,14 @@ def restore(runtime, path, client, timeout, *, ip_override=None):
             raise Error('La configuración del backup no coincide con su release.')
         if active['id'] != read_json(staging / 'releases' / active['id'] / 'versions.lock.json')['id']:
             raise Error('Release incoherente en backup.')
-        if ip_override is not None:
-            from .host import lan_ip
-            active['lan_ip'] = lan_ip(ip_override)
+        from .host import lan_ip
+        # La IP del backup también se valida: debe ser privada y estar asignada a este host.
+        try:
+            active['lan_ip'] = lan_ip(ip_override if ip_override is not None else active['lan_ip'])
+        except Error as exc:
+            raise Error(f'{exc} Usa restore --lan-ip IP_ACTUAL_DE_ESTE_HOST.') from exc
+        if not re.fullmatch(r'(?:docker.io/library/)?eclipse-temurin@sha256:[a-f0-9]{64}', str(active.get('java_base', ''))):
+            raise Error('El backup no fija una imagen base Java válida.')
         # Si los archivos Docker cambiaron desde el backup, stage() construye la imagen actual
         # sobre la misma release fijada: se restauran datos y builds, no código antiguo.
         for key, filename in managed_jars(active):
@@ -210,6 +237,10 @@ def restore(runtime, path, client, timeout, *, ip_override=None):
                            capture=True).stdout.strip()
             if existing:
                 raise Error('Hay contenedores del proyecto sin metadatos locales. Detenlos y recupera su configuración primero.')
+            # data/ sin estado gestionado (instalación interrumpida, mundo copiado a mano): no hay
+            # snapshot posible, así que se conserva íntegro en state/pre-restore-* en vez de borrarlo.
+            if runtime.data.exists() and any(runtime.data.iterdir()):
+                recovery = True
         # Si existe una marca de fallo, los datos pueden proceder de una actualización parcial.
         # Se preserva el directorio íntegro aunque no se presente como snapshot consistente.
         if runtime.active_path.exists() and not recovery:

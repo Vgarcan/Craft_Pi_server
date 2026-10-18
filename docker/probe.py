@@ -121,10 +121,32 @@ def rcon(command, properties=Path('/data/server.properties')):
         return payload
 
 
+def geyser_dump(path=Path('/data/plugins/Geyser-Spigot/dump.json'), timeout=25):
+    """Diagnóstico offline de Geyser. Se lee DENTRO del contenedor, como su usuario: el host (root)
+    nunca abre este archivo, que el propio servidor podría sustituir por un enlace."""
+    path.unlink(missing_ok=True)
+    try:
+        # OFFLINE es obligatorio: nunca se suben diagnósticos a dump.geysermc.org.
+        rcon('geyser dump offline')
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if path.is_file():
+                try:
+                    return json.loads(path.read_text()[:MAX_PACKET * 4])
+                except json.JSONDecodeError:
+                    pass
+            time.sleep(1)
+        raise ValueError('Geyser no creó un diagnóstico offline interpretable')
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else 'health'
     if mode == 'rcon':
         print(rcon(' '.join(sys.argv[2:])))
+    elif mode == 'dump':
+        print(json.dumps(geyser_dump()))
     else:
         host = sys.argv[2] if len(sys.argv) > 2 else '127.0.0.1'
         java = java_status(host)

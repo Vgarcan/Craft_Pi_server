@@ -28,8 +28,13 @@ HELPER = ['sudo', '-n', '/usr/bin/python3', '-I', str(Path(__file__).resolve().w
 SESSION_TTL = 12 * 3600
 MAX_BODY = 16 * 1024
 FAILURE_WINDOW, MAX_FAILURES = 600, 5
-COOKIE = 'mclan_session'
+MAX_SESSIONS, MAX_TRACKED_IPS = 20, 1024
+MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP = 32, 8
+# __Host-: el navegador sólo la acepta con Secure, Path=/ y sin Domain.
+COOKIE = '__Host-mclan_session'
 ITERATIONS = 300_000
+# PBKDF2 es caro a propósito: dos cálculos simultáneos como mucho para no saturar la Pi.
+HASHING = threading.BoundedSemaphore(2)
 
 
 def hash_password(password, salt=None, iterations=ITERATIONS):
@@ -153,11 +158,23 @@ class App:
             self.sessions.pop(match[1], None)
         return None
 
-    def throttled(self, ip):
+    def reserve_attempt(self, ip):
+        """Apunta el intento ANTES de calcular el hash: peticiones simultáneas no esquivan el límite."""
         now = time.time()
-        recent = [t for t in self.failures.get(ip, []) if now - t < FAILURE_WINDOW]
-        self.failures[ip] = recent
-        return len(recent) >= MAX_FAILURES
+        with self.lock:
+            for key in [k for k, v in self.failures.items() if not v or now - v[-1] >= FAILURE_WINDOW]:
+                del self.failures[key]
+            recent = [t for t in self.failures.get(ip, []) if now - t < FAILURE_WINDOW]
+            if len(recent) >= MAX_FAILURES or (ip not in self.failures and len(self.failures) >= MAX_TRACKED_IPS):
+                return None
+            recent.append(now)
+            self.failures[ip] = recent
+            return now
+
+    def release_attempt(self, ip, stamp):
+        with self.lock:
+            if stamp in self.failures.get(ip, []):
+                self.failures[ip].remove(stamp)
 
     def origin_ok(self, headers):
         """Defensa adicional a SameSite/CSRF: un Origin presente debe ser este mismo panel."""
@@ -203,6 +220,8 @@ class App:
         query = parse_qs(urlsplit(target).query)
         form = {k: v[0] for k, v in parse_qs(body.decode('utf-8', 'replace'), keep_blank_values=True).items()} if body else {}
         if path == '/login':
+            if method == 'POST' and not self.origin_ok(headers):
+                return 403, {}, self.page('Petición rechazada', '<p>Origen no permitido.</p>').encode()
             return self.login(method, form, ip)
         session = self.session(headers)
         if not session:
@@ -229,15 +248,28 @@ class App:
     def login(self, method, form, ip):
         message = ''
         if method == 'POST':
-            if self.throttled(ip):
+            stamp = self.reserve_attempt(ip)
+            if stamp is None:
                 return 429, {}, self.page('Demasiados intentos', '<p>Espera unos minutos.</p>').encode()
-            if check_password(form.get('password', ''), self.config['password']):
+            if not HASHING.acquire(timeout=10):
+                self.release_attempt(ip, stamp)
+                return 503, {}, self.page('Ocupado', '<p>Inténtalo de nuevo en unos segundos.</p>').encode()
+            try:
+                valid = check_password(form.get('password', '')[:1024], self.config['password'])
+            finally:
+                HASHING.release()
+            if valid:
+                self.release_attempt(ip, stamp)
                 token = secrets.token_urlsafe(32)
+                now = time.time()
                 with self.lock:
-                    self.sessions[token] = {'expires': time.time() + SESSION_TTL, 'csrf': secrets.token_urlsafe(24)}
+                    for key in [k for k, s in self.sessions.items() if s['expires'] <= now]:
+                        del self.sessions[key]
+                    while len(self.sessions) >= MAX_SESSIONS:
+                        del self.sessions[min(self.sessions, key=lambda k: self.sessions[k]['expires'])]
+                    self.sessions[token] = {'expires': now + SESSION_TTL, 'csrf': secrets.token_urlsafe(24)}
                 cookie = f'{COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL}'
                 return 303, {'Location': '/', 'Set-Cookie': cookie}, b''
-            self.failures.setdefault(ip, []).append(time.time())
             message = '<div class="msg bad">Contraseña incorrecta.</div>'
         body = (f'<div class="card">{message}<form method="post" action="/login"><label for="p">Contraseña</label>'
                 '<input id="p" type="password" name="password" autocomplete="current-password" required autofocus>'
@@ -422,11 +454,14 @@ class App:
                 '(usa _ en su lugar). Si Floodgate no encuentra el gamertag, usa su XUID o la apertura temporal.</p>'
                 '<p><button class="primary">Añadir</button></p></form></div>'
                 f'<div class="card"><h2>Apertura temporal para un jugador</h2><form method="post" action="/whitelist">{self.csrf(session)}'
-                '<input type="hidden" name="do" value="open"><label for="on">Gamertag o nombre</label>'
+                '<input type="hidden" name="do" value="open"><label for="oe">Edición</label>'
+                '<select id="oe" name="edition"><option value="bedrock">Bedrock</option><option value="java">Java</option></select>'
+                '<label for="on">Gamertag o nombre</label>'
                 '<input id="on" type="text" name="name" maxlength="16" required pattern="[A-Za-z0-9_]{1,16}">'
                 '<label for="mi">Minutos (máximo 15)</label><input id="mi" type="number" name="minutes" min="1" max="15" value="5">'
                 '<p class="muted">Desactiva la whitelist hasta que ese jugador entre. Entonces lo añade y vuelve a activarla; '
-                'si no entra a tiempo, la reactiva sin añadir a nadie. Mientras tanto puede entrar cualquier cuenta válida.</p>'
+                'si no entra a tiempo, la reactiva sin añadir a nadie. Quien entre en ese intervalo sin ser el elegido '
+                'es expulsado al cerrarla.</p>'
                 '<p><button>Abrir y esperar</button></p></form></div>')
         return 200, {}, self.page('Whitelist', body, session, '/whitelist').encode()
 
@@ -441,8 +476,9 @@ class App:
         elif action == 'switch' and form.get('value') in ('on', 'off'):
             self.result_flash(session, self.helper(['whitelist', form['value']]),
                               'Whitelist activada.' if form['value'] == 'on' else 'Whitelist desactivada.')
-        elif action == 'open':
-            return self.run_job(session, f'Esperando a {name}', ['whitelist-open-for', name, form.get('minutes', '5')])
+        elif action == 'open' and form.get('edition') in ('java', 'bedrock'):
+            return self.run_job(session, f'Esperando a {name}',
+                                ['whitelist-open-for', form['edition'], name, form.get('minutes', '5')])
         else:
             return 400, {}, b''
         return 303, {'Location': '/whitelist'}, b''
@@ -507,7 +543,9 @@ class App:
 
     def account_post(self, session, form, query):
         new = form.get('new', '')
-        if not check_password(form.get('current', ''), self.config['password']):
+        with HASHING:
+            current_ok = check_password(form.get('current', '')[:1024], self.config['password'])
+        if not current_ok:
             self.flash(session, 'bad', 'La contraseña actual no es correcta.')
         elif len(new) < 12 or new != form.get('repeat'):
             self.flash(session, 'bad', 'La nueva contraseña debe tener al menos 12 caracteres y coincidir en ambos campos.')
@@ -530,7 +568,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
     timeout = 30
 
     def respond(self, method):
-        length = int(self.headers.get('Content-Length') or 0)
+        declared = self.headers.get('Content-Length', '0')
+        if self.headers.get('Transfer-Encoding') or not re.fullmatch(r'[0-9]{1,6}', declared.strip() or '0'):
+            self.send_error(400)
+            return
+        length = int(declared.strip() or '0')
         if length > MAX_BODY:
             self.send_error(413)
             return
@@ -566,6 +608,35 @@ class PanelServer(http.server.ThreadingHTTPServer):
     def __init__(self, address, handler, app, context):
         super().__init__(address, handler)
         self.app, self.context = app, context
+        self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        self.per_ip, self.per_ip_lock = {}, threading.Lock()
+
+    def process_request(self, request, client_address):
+        """Rechaza conexiones por encima del límite total o por IP antes de crear un hilo."""
+        ip = client_address[0]
+        with self.per_ip_lock:
+            if self.per_ip.get(ip, 0) >= MAX_CONNECTIONS_PER_IP or not self.slots.acquire(blocking=False):
+                self.shutdown_request(request)
+                return
+            self.per_ip[ip] = self.per_ip.get(ip, 0) + 1
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.release(ip)
+            raise
+
+    def release(self, ip):
+        with self.per_ip_lock:
+            self.per_ip[ip] -= 1
+            if not self.per_ip[ip]:
+                del self.per_ip[ip]
+        self.slots.release()
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.release(client_address[0])
 
     def finish_request(self, request, client_address):
         request.settimeout(15)

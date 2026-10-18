@@ -329,6 +329,50 @@ class HostAndLifecycleTests(unittest.TestCase):
             self.assertEqual(runner.call_args.args[0], ['docker', 'update', '--restart', 'unless-stopped', 'abc'])
 
 
+class PackagingTests(unittest.TestCase):
+    def test_every_dockerfile_copy_is_allowed_by_dockerignore(self):
+        allowed = {line[1:] for line in (ROOT / 'docker/.dockerignore').read_text().split() if line.startswith('!')}
+        copied = {line.split()[-2] for line in (ROOT / 'docker/Dockerfile').read_text().splitlines()
+                  if line.startswith('COPY')}
+        self.assertTrue(copied <= allowed, copied - allowed)
+        self.assertEqual(set(runtime_module.RUNTIME_FILES) - {'Dockerfile'}, copied)
+
+    def test_previous_template_hashes_match_git_history(self):
+        import hashlib
+        import shutil
+        import subprocess
+        if not shutil.which('git') or not (ROOT / '.git').exists():
+            self.skipTest('sin historial git (instalación desde ZIP)')
+        log = subprocess.run(['git', '-C', str(ROOT), 'log', '--format=%H', '--', 'docker/compose.template.yaml'],
+                             capture_output=True, text=True, check=True).stdout.split()
+        historic = set()
+        for commit in log:
+            blob = subprocess.run(['git', '-C', str(ROOT), 'show', f'{commit}:docker/compose.template.yaml'],
+                                  capture_output=True, check=True).stdout
+            historic.add(hashlib.sha256(blob).hexdigest())
+        current = sha256(ROOT / 'docker/compose.template.yaml')
+        self.assertTrue(set(runtime_module.PREVIOUS_TEMPLATES) <= historic)
+        # Toda plantilla publicada que no sea la actual debe estar reconocida como gestionada.
+        self.assertEqual(historic - {current}, set(runtime_module.PREVIOUS_TEMPLATES) - {current})
+
+    def test_console_filter_blocks_namespaced_lifecycle_commands(self):
+        runtime = Mock()
+        for text in ('minecraft:stop', 'bukkit:reload confirm', 'STOP', 'paper:restart'):
+            args = argparse.Namespace(command='command', text=[text])
+            with self.subTest(text=text), patch('mclan.cli.run', return_value=Mock(stdout='unix:///var/run/docker.sock\n')), \
+                 patch('mclan.cli.settings', return_value={'contact': 'https://example.com'}), self.assertRaises(Error):
+                cli.manage(runtime, args)
+
+    def test_only_private_addresses_are_lan(self):
+        from mclan import host
+        addresses = json.dumps([{'ifname': 'eth0', 'addr_info': [{'family': 'inet', 'local': '8.8.4.4'}]},
+                                {'ifname': 'wlan0', 'addr_info': [{'family': 'inet', 'local': '192.168.2.120'}]}])
+        with patch.object(host, 'run', return_value=Mock(stdout=addresses)), patch.object(host.shutil, 'which', return_value='/sbin/ip'):
+            self.assertEqual(host.lan_ip('auto'), '192.168.2.120')
+            with self.assertRaises(Error):
+                host.lan_ip('8.8.4.4')
+
+
 class ProtocolTests(unittest.TestCase):
     def test_varint_and_truncated_input(self):
         class Reader:
@@ -388,6 +432,19 @@ class ProtocolTests(unittest.TestCase):
         fake.recv.return_value = b'not-bedrock'
         with patch.object(probe.socket, 'socket', return_value=fake), self.assertRaises(ValueError):
             probe.bedrock_status('127.0.0.1')
+
+    def test_geyser_dump_is_read_and_removed_inside_container(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dump = Path(directory) / 'dump.json'
+            def fake_rcon(command):
+                self.assertEqual(command, 'geyser dump offline')
+                dump.write_text('{"gitInfo": {"buildNumber": "1265"}}')
+                return ''
+            with patch.object(probe, 'rcon', side_effect=fake_rcon):
+                self.assertEqual(probe.geyser_dump(dump)['gitInfo']['buildNumber'], '1265')
+            self.assertFalse(dump.exists())
+            with patch.object(probe, 'rcon', return_value=''), self.assertRaises(ValueError):
+                probe.geyser_dump(dump, timeout=1)
 
     def test_rcon_authentication_and_command(self):
         fake = Mock()
@@ -476,6 +533,10 @@ class BackupTests(unittest.TestCase):
         self.runtime.finish_transaction = Mock(side_effect=lambda: (self.runtime.state / 'operation.json').unlink(missing_ok=True))
         self.runtime.stage = Mock(side_effect=lambda lock, client, ip: lock)
         self.runtime.validate = Mock(return_value=self.active)
+        # La IP de ejemplo no existe en la máquina de pruebas; restore la valida con host.lan_ip.
+        lan_ip = patch('mclan.host.lan_ip', side_effect=lambda ip: ip)
+        lan_ip.start()
+        self.addCleanup(lan_ip.stop)
 
     def tearDown(self): self.temp.cleanup()
 
@@ -695,6 +756,34 @@ class BackupTests(unittest.TestCase):
         previous = list(self.runtime.state.glob('pre-restore-*'))
         self.assertEqual(len(previous), 1)
         self.assertEqual((previous[0] / 'level.dat').read_bytes(), b'crashed-world')
+
+    def test_restore_over_unmanaged_data_preserves_it(self):
+        path = backups.snapshot(self.runtime)
+        self.runtime.active_path.unlink()
+        (self.runtime.data / 'level.dat').write_bytes(b'hand-copied-world')
+        with patch('mclan.backups.os.chown'), patch('mclan.backups.run', return_value=Mock(stdout='')):
+            backups.restore(self.runtime, path, Mock(), 10)
+        previous = list(self.runtime.state.glob('pre-restore-*'))
+        self.assertEqual(len(previous), 1)
+        self.assertEqual((previous[0] / 'level.dat').read_bytes(), b'hand-copied-world')
+        self.assertEqual((self.runtime.data / 'level.dat').read_bytes(), b'original-world')
+
+    def test_restore_rejects_ip_not_on_this_host(self):
+        path = backups.snapshot(self.runtime)
+        with patch('mclan.host.lan_ip', side_effect=Error('La IP indicada no está asignada.')):
+            with self.assertRaises(Error) as caught:
+                backups.restore(self.runtime, path, Mock(), 10)
+        self.assertIn('--lan-ip', str(caught.exception))
+        self.assertEqual((self.runtime.data / 'level.dat').read_bytes(), b'original-world')
+
+    def test_update_with_server_stopped_still_verifies_then_stops(self):
+        args = argparse.Namespace(minecraft_version=None, plan=False, timeout=10)
+        self.runtime.running.return_value = False
+        newer = dict(copy.deepcopy(self.active), id='d'*20)
+        with patch('mclan.cli.versions.resolve', return_value=newer), patch('mclan.cli.confirm'):
+            cli.update(self.runtime, args, Mock())
+        self.runtime.start.assert_called_once_with(10, pending=True)
+        self.assertEqual(self.runtime.stop.call_count, 2)
 
     def test_restore_can_rebind_for_new_host(self):
         path = backups.snapshot(self.runtime)

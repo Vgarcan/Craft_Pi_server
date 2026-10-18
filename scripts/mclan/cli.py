@@ -195,10 +195,12 @@ def update(runtime, args, client):
             atomic_write(runtime.root / 'compose.yaml', (runtime.root / 'docker/compose.template.yaml').read_text())
         runtime.activate(staged)
         runtime.validate()
-        if was_running:
-            runtime.start(args.timeout, pending=True)
-        else:
-            LOG.info('Actualización preparada; se conserva el servidor detenido. Verifica al iniciarlo.')
+        # Se verifica siempre la release nueva, aunque el servidor estuviera parado: así la marca no
+        # se retira sin haber comprobado el mundo convertido. Después se respeta la parada.
+        runtime.start(args.timeout, pending=True)
+        if not was_running:
+            runtime.stop()
+            LOG.info('Actualización verificada; se conserva el servidor detenido como estaba.')
         runtime.finish_transaction()
     except BaseException:
         write_json(marker, {"operation": "update-failed", "backup": str(backup)})
@@ -249,6 +251,8 @@ def manage(runtime, args):
     elif command == 'start':
         runtime.start(args.timeout)
     elif command == 'restart':
+        if (runtime.state / 'operation.json').exists():
+            raise Error('Hay una operación interrumpida: restart no podría volver a arrancar. Consulta recuperación.')
         runtime.stop()
         runtime.start(args.timeout)
     elif command == 'verify':
@@ -296,7 +300,8 @@ def manage(runtime, args):
         text = ' '.join(args.text).strip().lstrip('/')
         if not text or '\n' in text or '\r' in text or len(text) > 2000:
             raise Error('Comando vacío o demasiado largo.')
-        if text.split()[0].lower() in ('stop', 'restart', 'reload'):
+        # También con espacio de nombres: minecraft:stop, bukkit:reload…
+        if text.split()[0].lower().split(':')[-1] in ('stop', 'restart', 'reload'):
             raise Error('Usa manage.sh stop/restart; reload no está soportado.')
         confirm('EJECUTAR', 'Los comandos de consola tienen permisos de administrador y pueden cambiar el mundo.')
         print(runtime.exec_probe('rcon', text).stdout)

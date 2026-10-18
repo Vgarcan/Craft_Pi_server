@@ -89,7 +89,8 @@ class Runtime:
         if drift and not allow_drift:
             raise Error('El proyecto se actualizó y los archivos Docker o Compose difieren de la instalación activa. '
                         'Ejecuta sudo ./manage.sh update para reconstruir y verificar con backup previo.')
-        for path in self.data.rglob('*'):
+        from .backups import tree
+        for path in tree(self.data, self.root):
             if path.is_symlink():
                 raise Error('No se admiten enlaces simbólicos dentro de data/.')
         properties = dict(line.split('=', 1) for line in (self.data / 'server.properties').read_text().splitlines()
@@ -262,7 +263,12 @@ class Runtime:
             raise Error('Java Status no anuncia la versión Minecraft fijada.')
         self.verify_nethernet(active, info)
         if plugin_active(active, 'bluemap'):
-            self.verify_bluemap(active)
+            # El mapa es accesorio: un fallo suyo (p. ej. sin Internet para las texturas) no debe
+            # tumbar un update o restore cuyo Java y Bedrock funcionan.
+            try:
+                self.verify_bluemap(active)
+            except Error as exc:
+                LOG.warning('%s El servidor de juego está verificado.', exc)
         LOG.info('Verificación local correcta: Java %s; Bedrock %s; signaling NetherNet activo.',
                  java['version']['name'], bedrock['version'])
         print(f"Java: {active['lan_ip']}:25565 (Minecraft {active['minecraft']})")
@@ -276,7 +282,11 @@ class Runtime:
     def verify_nethernet(self, active, info):
         """Geyser debe confirmar signaling en este arranque y el TCP publicado debe aceptar conexiones."""
         log = self.logs_since_start(info)
-        if 'Built-in signaling started on' not in log:
+        # docker logs rota (3 × 10 MB): tras semanas en marcha la línea puede haber salido del log.
+        # latest.log de Paper cubre toda la sesión y se lee dentro del contenedor, no como root.
+        if 'Built-in signaling started on' not in log and self.compose(
+                'exec', '-T', 'minecraft', 'grep', '-q', 'Built-in signaling started on', '/data/logs/latest.log',
+                capture=True, check=False, timeout=30).returncode:
             raise Error('Geyser no confirma el signaling NetherNet; Bedrock 26.60+ no podría conectar. '
                         'Revisa manage.sh logs.')
         import socket
@@ -309,31 +319,12 @@ class Runtime:
             time.sleep(3)
 
     def verify_dump(self, active, protocol):
-        # OFFLINE es obligatorio: nunca subimos diagnósticos a dump.geysermc.org.
-        dump = self.data / 'plugins/Geyser-Spigot/dump.json'
-        previous = dump.read_bytes() if dump.exists() else None
+        result = self.exec_probe('dump')
         try:
-            dump.unlink(missing_ok=True)
-            self.exec_probe('rcon', 'geyser', 'dump', 'offline')
-            deadline = time.monotonic() + 25
-            while time.monotonic() < deadline:
-                if dump.exists():
-                    try:
-                        diagnostic = read_json(dump)
-                        break
-                    except json.JSONDecodeError:
-                        pass
-                time.sleep(1)
-            else:
-                raise Error('Geyser no creó un diagnóstico offline interpretable.')
-            validate_diagnostic(diagnostic, active, protocol)
-        finally:
-            dump.unlink(missing_ok=True)
-            if previous is not None:
-                dump.write_bytes(previous)
-                os.chown(dump, 10000, 10000)
-                dump.chmod(0o600)
-
+            diagnostic = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise Error('Geyser no creó un diagnóstico offline interpretable.') from exc
+        validate_diagnostic(diagnostic, active, protocol)
 
 def plugin_active(active, name):
     return name in active and name not in active.get('disabled_plugins', [])
