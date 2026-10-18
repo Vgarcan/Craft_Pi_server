@@ -9,7 +9,7 @@ from urllib.error import HTTPError, URLError
 from .common import Error, sha256
 
 ALLOWED = {"fill.papermc.io", "fill-data.papermc.io", "download.geysermc.org",
-           "geysermc.org", "download.docker.com"}
+           "geysermc.org", "download.docker.com", "hangar.papermc.io", "hangarcdn.papermc.io"}
 
 
 def valid_url(url):

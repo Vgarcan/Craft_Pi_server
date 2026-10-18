@@ -160,7 +160,7 @@ def memory_limits(controllers=Path('/sys/fs/cgroup/cgroup.controllers')):
 
 def free_ports(ip):
     for kind, port in ((socket.SOCK_STREAM, 25565), (socket.SOCK_DGRAM, 19132),
-                       (socket.SOCK_STREAM, 19132), (socket.SOCK_DGRAM, 19133)):
+                       (socket.SOCK_STREAM, 19132), (socket.SOCK_DGRAM, 19133), (socket.SOCK_STREAM, 8100)):
         with socket.socket(socket.AF_INET, kind) as sock:
             try:
                 sock.bind((ip, port))

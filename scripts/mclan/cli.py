@@ -156,10 +156,10 @@ def update(runtime, args, client):
     project_changed = template_changed or runtime.runtime_drift(active)
     requested = args.minecraft_version or active['minecraft']
     proposal = versions.resolve(client, requested)
-    print(f"Actual: Minecraft {active['minecraft']}; Paper {active['paper']['build']}; "
-          f"Geyser {active['geyser']['build']}; Floodgate {active['floodgate']['build']}")
-    print(f"Propuesta: Minecraft {proposal['minecraft']}; Paper {proposal['paper']['build']}; "
-          f"Geyser {proposal['geyser']['build']}; Floodgate {proposal['floodgate']['build']}")
+    for label, lock in (('Actual', active), ('Propuesta', proposal)):
+        bluemap = f"; BlueMap {lock['bluemap']['version']}" if 'bluemap' in lock else '; sin BlueMap'
+        print(f"{label}: Minecraft {lock['minecraft']}; Paper {lock['paper']['build']}; "
+              f"Geyser {lock['geyser']['build']}; Floodgate {lock['floodgate']['build']}{bluemap}")
     if project_changed:
         print('Proyecto: archivos Docker/Compose nuevos; se reconstruirá la imagen'
               + (' y se aplicará la plantilla Compose actual.' if template_changed else '.'))

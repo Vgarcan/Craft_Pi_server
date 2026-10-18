@@ -58,7 +58,7 @@ fi
 
 section 'Puertos (sólo IP LAN)'
 listening="$(ss -Htulpn)"
-for spec in tcp:25565 udp:19132 tcp:19132 udp:19133; do
+for spec in tcp:25565 udp:19132 tcp:19132 udp:19133 tcp:8100; do
     proto=${spec%%:*} port=${spec##*:}
     if grep -Eq "^$proto .* $LAN_IP:$port " <<<"$listening"; then ok "$proto/$port en $LAN_IP"; else fail "$proto/$port no escucha en $LAN_IP"; fi
     if grep -Eq "^$proto .* (0\.0\.0\.0|\*|\[::\]):$port " <<<"$listening"; then fail "$proto/$port publicado en todas las interfaces"; fi
@@ -72,6 +72,18 @@ if [[ ${started:-} ]]; then
     expect fail 'Signaling NetherNet iniciado' 'Signaling NetherNet no iniciado' has 'Built-in signaling started on'
     expect fail 'Sin aviso de NetherNet desactivado' 'Geyser avisa de NetherNet desactivado' lacks 'NetherNet support is NOT enabled'
     expect fail 'Geyser con acceso a servicios de Microsoft' 'Geyser sin cifrado: revisa la salida a Internet' lacks 'Unable to set up encryption'
+fi
+
+section 'Mapa BlueMap'
+if python3 -c 'import json,sys; sys.exit(0 if "bluemap" in json.load(open("state/active.json")) else 1)'; then
+    expect fail "Web del mapa en http://$LAN_IP:8100/" "La web de BlueMap no responde en $LAN_IP:8100" \
+        python3 -c 'import sys, urllib.request; sys.exit(urllib.request.urlopen(sys.argv[1], timeout=5).status != 200)' "http://$LAN_IP:8100/"
+    if [[ ${started:-} ]]; then
+        expect warn 'Recursos de Minecraft descargados por BlueMap' 'BlueMap no confirma la descarga de recursos (accept-download)' \
+            lacks 'accept-download'
+    fi
+else
+    warn 'La release activa no incluye BlueMap'
 fi
 
 section 'Estado gestionado'

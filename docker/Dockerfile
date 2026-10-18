@@ -11,6 +11,6 @@ COPY --chmod=0555 entrypoint.sh /opt/mclan/entrypoint.sh
 COPY --chmod=0444 probe.py /opt/mclan/probe.py
 WORKDIR /data
 USER 10000:10000
-EXPOSE 25565/tcp 19132/udp 19132/tcp 19133/udp
+EXPOSE 25565/tcp 19132/udp 19132/tcp 19133/udp 8100/tcp
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/opt/mclan/entrypoint.sh"]

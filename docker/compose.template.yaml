@@ -24,6 +24,8 @@ services:
       # Signaling NetherNet integrado (TCP) y tráfico WebRTC (UDP).
       - "${LAN_IP:?Falta LAN_IP}:19132:19132/tcp"
       - "${LAN_IP:?Falta LAN_IP}:19133:19133/udp"
+      # Web de BlueMap (mapa y jugadores en vivo), sólo en la LAN.
+      - "${LAN_IP:?Falta LAN_IP}:8100:8100/tcp"
     volumes:
       - type: bind
         source: ./data

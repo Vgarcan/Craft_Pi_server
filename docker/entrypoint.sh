@@ -7,18 +7,23 @@ if [ ! -f /data/eula.txt ] || ! grep -Eq '^eula=true\r?$' /data/eula.txt; then
     echo 'Debes aceptar la EULA antes de iniciar.' >&2
     exit 1
 fi
-# Sólo se sustituyen los dos binarios gestionados; nunca mundos/configuraciones.
+# Sólo se sustituyen los JAR de plugins gestionados; nunca mundos/configuraciones.
 mkdir -p /data/plugins
-if [ -L /data/plugins ] || [ -L /data/plugins/Geyser-Spigot.jar ] \
-    || [ -L /data/plugins/floodgate-spigot.jar ]; then
-    echo 'No se admiten enlaces en las rutas de los plugins gestionados.' >&2
-    exit 1
-fi
+[ ! -L /data/plugins ] || { echo 'No se admiten enlaces en plugins/.' >&2; exit 1; }
 # La copia hereda el modo 0444 del release y queda en 0400: cp no podría
 # sobrescribirla en el siguiente arranque. Se copia aparte y se renombra.
-for jar in Geyser-Spigot.jar floodgate-spigot.jar; do
-    cp /opt/release/"$jar" /data/plugins/."$jar".mclan-new
-    mv -f /data/plugins/."$jar".mclan-new /data/plugins/"$jar"
+# Un plugin gestionado ausente de la release (p. ej. tras restaurar una antigua) se retira.
+for jar in Geyser-Spigot.jar floodgate-spigot.jar BlueMap.jar; do
+    if [ -L /data/plugins/"$jar" ]; then
+        echo 'No se admiten enlaces en las rutas de los plugins gestionados.' >&2
+        exit 1
+    fi
+    if [ -f /opt/release/"$jar" ]; then
+        cp /opt/release/"$jar" /data/plugins/."$jar".mclan-new
+        mv -f /data/plugins/."$jar".mclan-new /data/plugins/"$jar"
+    else
+        rm -f /data/plugins/"$jar"
+    fi
 done
 # NetherNet (Bedrock 26.60+) anuncia direcciones WebRTC: la IP interna del
 # contenedor no es alcanzable desde la LAN, así que se anuncia la del host.

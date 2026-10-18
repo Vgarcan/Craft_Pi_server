@@ -1,0 +1,264 @@
+{
+ "pagination": {
+  "count": 37,
+  "limit": 10,
+  "offset": 0
+ },
+ "result": [
+  {
+   "name": "5.29",
+   "createdAt": "2026-10-10T17:43:42.930529Z",
+   "channel": {
+    "name": "Release"
+   },
+   "platformDependencies": {
+    "PAPER": [
+     "26.1.1",
+     "26.1.2",
+     "26.2",
+     "26.3"
+    ]
+   },
+   "downloads": {
+    "PAPER": {
+     "fileInfo": {
+      "name": "bluemap-5.29-paper.jar",
+      "sizeBytes": 6336407,
+      "sha256Hash": "7bf475936c26107d476c63151c76d5b49e865eebeada12c9e7d92155de877b9f"
+     },
+     "externalUrl": null,
+     "downloadUrl": "https://hangarcdn.papermc.io/plugins/Blue/BlueMap/versions/5.29/PAPER/bluemap-5.29-paper.jar"
+    }
+   }
+  },
+  {
+   "name": "5.28",
+   "createdAt": "2026-09-25T17:19:50.968281Z",
+   "channel": {
+    "name": "Release"
+   },
+   "platformDependencies": {
+    "PAPER": [
+     "26.1.1",
+     "26.1.2",
+     "26.2",
+     "26.3"
+    ]
+   },
+   "downloads": {
+    "PAPER": {
+     "fileInfo": {
+      "name": "bluemap-5.28-paper.jar",
+      "sizeBytes": 6285353,
+      "sha256Hash": "4cfb4a9963132d5be0a9db031a28a98e9df92deed37ebb0756d3a7dd8721ab98"
+     },
+     "externalUrl": null,
+     "downloadUrl": "https://hangarcdn.papermc.io/plugins/Blue/BlueMap/versions/5.28/PAPER/bluemap-5.28-paper.jar"
+    }
+   }
+  },
+  {
+   "name": "5.27",
+   "createdAt": "2026-09-16T07:22:42.421626Z",
+   "channel": {
+    "name": "Release"
+   },
+   "platformDependencies": {
+    "PAPER": [
+     "26.1.1",
+     "26.1.2",
+     "26.2",
+     "26.3"
+    ]
+   },
+   "downloads": {
+    "PAPER": {
+     "fileInfo": {
+      "name": "bluemap-5.27-paper.jar",
+      "sizeBytes": 6276259,
+      "sha256Hash": "d836d004c73d8163d6aad6c208e44e0e1d7944d34615a8a5b1558a20a570de84"
+     },
+     "externalUrl": null,
+     "downloadUrl": "https://hangarcdn.papermc.io/plugins/Blue/BlueMap/versions/5.27/PAPER/bluemap-5.27-paper.jar"
+    }
+   }
+  },
+  {
+   "name": "5.26",
+   "createdAt": "2026-09-15T23:30:55.164107Z",
+   "channel": {
+    "name": "Release"
+   },
+   "platformDependencies": {
+    "PAPER": [
+     "26.1.1",
+     "26.1.2",
+     "26.2",
+     "26.3"
+    ]
+   },
+   "downloads": {
+    "PAPER": {
+     "fileInfo": {
+      "name": "bluemap-5.26-paper.jar",
+      "sizeBytes": 6276294,
+      "sha256Hash": "796e53e738f9a27dc533beb719ba3364d6243402fc7e813e51bdbfc21546d480"
+     },
+     "externalUrl": null,
+     "downloadUrl": "https://hangarcdn.papermc.io/plugins/Blue/BlueMap/versions/5.26/PAPER/bluemap-5.26-paper.jar"
+    }
+   }
+  },
+  {
+   "name": "5.25",
+   "createdAt": "2026-09-15T17:33:45.761267Z",
+   "channel": {
+    "name": "Release"
+   },
+   "platformDependencies": {
+    "PAPER": [
+     "26.1.1",
+     "26.1.2",
+     "26.2",
+     "26.3"
+    ]
+   },
+   "downloads": {
+    "PAPER": {
+     "fileInfo": {
+      "name": "bluemap-5.25-paper.jar",
+      "sizeBytes": 6276134,
+      "sha256Hash": "d93520c1d292f30c7385df7f1042956bb74b8c72988b609b09455f5a10b5b0d2"
+     },
+     "externalUrl": null,
+     "downloadUrl": "https://hangarcdn.papermc.io/plugins/Blue/BlueMap/versions/5.25/PAPER/bluemap-5.25-paper.jar"
+    }
+   }
+  },
+  {
+   "name": "5.24",
+   "createdAt": "2026-09-10T15:41:06.185836Z",
+   "channel": {
+    "name": "Release"
+   },
+   "platformDependencies": {
+    "PAPER": [
+     "26.1.1",
+     "26.1.2",
+     "26.2",
+     "26.3"
+    ]
+   },
+   "downloads": {
+    "PAPER": {
+     "fileInfo": {
+      "name": "bluemap-5.24-paper.jar",
+      "sizeBytes": 5813071,
+      "sha256Hash": "23592af35d1289ff9251301994948f1d69e8d81b569515ce81a91cba4daabc78"
+     },
+     "externalUrl": null,
+     "downloadUrl": "https://hangarcdn.papermc.io/plugins/Blue/BlueMap/versions/5.24/PAPER/bluemap-5.24-paper.jar"
+    }
+   }
+  },
+  {
+   "name": "5.23",
+   "createdAt": "2026-08-06T17:09:43.968342Z",
+   "channel": {
+    "name": "Release"
+   },
+   "platformDependencies": {
+    "PAPER": [
+     "26.1.1",
+     "26.1.2",
+     "26.2"
+    ]
+   },
+   "downloads": {
+    "PAPER": {
+     "fileInfo": {
+      "name": "bluemap-5.23-paper.jar",
+      "sizeBytes": 5791779,
+      "sha256Hash": "339554d75cedab354e376677cfc7308c499952915849e8e2994718e4a153d64e"
+     },
+     "externalUrl": null,
+     "downloadUrl": "https://hangarcdn.papermc.io/plugins/Blue/BlueMap/versions/5.23/PAPER/bluemap-5.23-paper.jar"
+    }
+   }
+  },
+  {
+   "name": "5.22",
+   "createdAt": "2026-06-17T07:25:19.612218Z",
+   "channel": {
+    "name": "Release"
+   },
+   "platformDependencies": {
+    "PAPER": [
+     "26.1.1",
+     "26.1.2",
+     "26.2"
+    ]
+   },
+   "downloads": {
+    "PAPER": {
+     "fileInfo": {
+      "name": "bluemap-5.22-paper.jar",
+      "sizeBytes": 5777539,
+      "sha256Hash": "9128b0b2c6939c5c0352b878805f0b10dd4dc2bf58fc31d1af260902f9b94d05"
+     },
+     "externalUrl": null,
+     "downloadUrl": "https://hangarcdn.papermc.io/plugins/Blue/BlueMap/versions/5.22/PAPER/bluemap-5.22-paper.jar"
+    }
+   }
+  },
+  {
+   "name": "5.21",
+   "createdAt": "2026-06-16T23:35:11.400581Z",
+   "channel": {
+    "name": "Release"
+   },
+   "platformDependencies": {
+    "PAPER": [
+     "26.1.1",
+     "26.1.2",
+     "26.2"
+    ]
+   },
+   "downloads": {
+    "PAPER": {
+     "fileInfo": {
+      "name": "bluemap-5.21-paper.jar",
+      "sizeBytes": 5777500,
+      "sha256Hash": "44027a347da1814794b88ed33c7697927b2f7b92a8d2d65481c3ccb396691a63"
+     },
+     "externalUrl": null,
+     "downloadUrl": "https://hangarcdn.papermc.io/plugins/Blue/BlueMap/versions/5.21/PAPER/bluemap-5.21-paper.jar"
+    }
+   }
+  },
+  {
+   "name": "5.20",
+   "createdAt": "2026-04-12T17:17:53.890713Z",
+   "channel": {
+    "name": "Release"
+   },
+   "platformDependencies": {
+    "PAPER": [
+     "26.1.1",
+     "26.1.2"
+    ]
+   },
+   "downloads": {
+    "PAPER": {
+     "fileInfo": {
+      "name": "bluemap-5.20-paper.jar",
+      "sizeBytes": 5730307,
+      "sha256Hash": "c939c98b728aa7089a04b7aca1a6979e92a37f252471f6abad66749ede806339"
+     },
+     "externalUrl": null,
+     "downloadUrl": "https://hangarcdn.papermc.io/plugins/Blue/BlueMap/versions/5.20/PAPER/bluemap-5.20-paper.jar"
+    }
+   }
+  }
+ ]
+}

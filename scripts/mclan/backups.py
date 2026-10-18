@@ -10,6 +10,15 @@ from datetime import datetime, timezone
 import uuid
 
 from .common import Error, LOG, atomic_write, read_json, run, sha256, write_json
+from .versions import JARS, managed_jars
+
+
+# Teselas del mapa: regenerables y grandes. BlueMap las vuelve a renderizar tras un restore.
+EXCLUDED = ('data/bluemap/web/maps',)
+
+
+def excluded(relative):
+    return any(relative == prefix or relative.startswith(prefix + '/') for prefix in EXCLUDED)
 
 
 def stamp():
@@ -31,6 +40,8 @@ def snapshot(runtime, label='manual'):
         if not base.exists():
             raise Error(f'Falta un componente del backup: {base}')
         for path in [base, *(sorted(base.rglob('*')) if base.is_dir() else [])]:
+            if excluded(str(path.relative_to(root))):
+                continue
             if path.is_symlink() or not (path.is_file() or path.is_dir()):
                 raise Error('Backup cancelado: enlaces o archivos especiales en los datos.')
             if path.is_dir():
@@ -75,7 +86,7 @@ def allowed(name, release_id):
     return (name in ('.env', 'compose.yaml', 'config', 'config/settings.json', 'state', 'state/active.json', 'releases')
             or name == f'releases/{release_id}'
             or (len(p.parts) == 3 and p.parts[:2] == ('releases', release_id)
-                and p.name in ('paper.jar', 'Geyser-Spigot.jar', 'floodgate-spigot.jar', 'versions.lock.json')))
+                and p.name in (*JARS.values(), 'versions.lock.json')))
 
 
 def validate_archive(path, destination, *, extract=True):
@@ -171,7 +182,7 @@ def restore(runtime, path, client, timeout, *, ip_override=None):
             active['lan_ip'] = lan_ip(ip_override)
         # Si los archivos Docker cambiaron desde el backup, stage() construye la imagen actual
         # sobre la misma release fijada: se restauran datos y builds, no código antiguo.
-        for key, filename in [('paper', 'paper.jar'), ('geyser', 'Geyser-Spigot.jar'), ('floodgate', 'floodgate-spigot.jar')]:
+        for key, filename in managed_jars(active):
             if sha256(staging / 'releases' / active['id'] / filename) != active[key]['sha256']:
                 raise Error('Un JAR del backup no coincide con el lock.')
         # Preparar imagen/JARs antes de sustituir datos evita perder disponibilidad por red.

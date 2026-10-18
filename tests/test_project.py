@@ -22,6 +22,7 @@ from mclan.common import Error, confirm, create_only, read_json, sha256, write_j
 from mclan.net import Client, valid_url
 from mclan import runtime as runtime_module
 from mclan.runtime import Runtime, shutdown_saved, validate_diagnostic
+from mclan.versions import managed_jars
 
 spec = importlib.util.spec_from_file_location('probe', ROOT / 'docker/probe.py')
 probe = importlib.util.module_from_spec(spec)
@@ -31,6 +32,8 @@ FIXTURES = ROOT / 'tests/fixtures'
 
 class FakeClient:
     def json(self, url):
+        if 'hangar.papermc.io' in url:
+            return read_json(FIXTURES / 'hangar_bluemap.json')
         if '/geyser/' in url:
             return read_json(FIXTURES / 'geyser_build.json')
         if '/floodgate/' in url:
@@ -51,7 +54,7 @@ def sample_active(root):
                   runtime_sources={n: sha256(ROOT / 'docker' / n) for n in ('Dockerfile', 'entrypoint.sh', 'probe.py')})
     release = root / 'releases' / active['id']
     release.mkdir(parents=True)
-    for key, name in [('paper', 'paper.jar'), ('geyser', 'Geyser-Spigot.jar'), ('floodgate', 'floodgate-spigot.jar')]:
+    for key, name in managed_jars(active):
         (release / name).write_bytes(key.encode())
         active[key]['sha256'] = sha256(release / name)
     write_json(release / 'versions.lock.json', active)
@@ -66,6 +69,33 @@ class VersionsTests(unittest.TestCase):
         self.assertEqual(lock['paper']['build'], 205)
         self.assertEqual(lock['geyser']['build'], 1265)
         self.assertNotIn('latest', lock['geyser']['url'])
+        self.assertIn('bluemap', lock)
+
+    def test_bluemap_newest_release_declaring_exact_version(self):
+        lock = versions.resolve(FakeClient())
+        self.assertEqual(lock['bluemap']['version'], '5.29')
+        self.assertEqual(lock['bluemap']['sha256'], '7bf475936c26107d476c63151c76d5b49e865eebeada12c9e7d92155de877b9f')
+        valid_url(lock['bluemap']['url'])
+        # El orden de la API no decide; tampoco se aceptan canales no Release ni versiones no declaradas.
+        data = read_json(FIXTURES / 'hangar_bluemap.json')
+        data['result'].reverse()
+        data['result'][-1]['channel']['name'] = 'Snapshot'
+        client = FakeClient()
+        client.json = lambda url: data if 'hangar' in url else FakeClient().json(url)
+        self.assertEqual(versions.bluemap(client, '26.3')['version'], '5.28')
+        with self.assertRaises(Error): versions.bluemap(client, '27.1')
+
+    def test_bluemap_is_part_of_release_identity(self):
+        first = versions.resolve(FakeClient())
+        data = read_json(FIXTURES / 'hangar_bluemap.json')
+        data['result'] = data['result'][1:]
+        client = FakeClient()
+        client.json = lambda url: data if 'hangar' in url else FakeClient().json(url)
+        self.assertNotEqual(versions.resolve(client)['id'], first['id'])
+
+    def test_old_release_without_bluemap_keeps_three_jars(self):
+        self.assertEqual([k for k, _ in managed_jars({'paper': 1, 'geyser': 1, 'floodgate': 1})],
+                         ['paper', 'geyser', 'floodgate'])
 
     def test_mismatch_fails_closed(self):
         with self.assertRaises(Error):
@@ -279,7 +309,7 @@ class HostAndLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             runtime = Runtime(Path(directory))
             write_json(runtime.state / 'operation.json', {'operation': 'update'})
-            runtime.validate = Mock()
+            runtime.validate = Mock(return_value={})
             runtime.compose = Mock()
             runtime.verify = Mock()
             runtime.start(10, pending=True)
@@ -376,6 +406,10 @@ class ProtocolTests(unittest.TestCase):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def release(self):
+        """Release sin BlueMap: el diagnóstico base sólo contiene Geyser y Floodgate."""
+        return {k: v for k, v in versions.resolve(FakeClient()).items() if k != 'bluemap'}
+
     def diagnostic(self):
         return {'bootstrapInfo': {'onlineMode': True, 'plugins': [
             {'name': 'Geyser-Spigot', 'enabled': True}, {'name': 'floodgate', 'enabled': True}]},
@@ -384,7 +418,7 @@ class DiagnosticTests(unittest.TestCase):
                                                         'advanced': {'bedrock': {'validate-bedrock-login': True}}}}
 
     def test_enabled_plugins_and_exact_protocol_required(self):
-        active = versions.resolve(FakeClient())
+        active = self.release()
         validate_diagnostic(self.diagnostic(), active, 999)
         invalid = self.diagnostic()
         invalid['bootstrapInfo']['plugins'][1]['enabled'] = False
@@ -394,19 +428,28 @@ class DiagnosticTests(unittest.TestCase):
     def test_offline_java_auth_rejected(self):
         invalid = self.diagnostic()
         invalid['bootstrapInfo']['onlineMode'] = False
-        with self.assertRaises(Error): validate_diagnostic(invalid, versions.resolve(FakeClient()), 999)
+        with self.assertRaises(Error): validate_diagnostic(invalid, self.release(), 999)
 
     def test_wrong_auth_and_wrong_build_rejected(self):
         for change in ('auth', 'build'):
             diagnostic = self.diagnostic()
             if change == 'auth': diagnostic['config']['java']['auth-type'] = 'offline'
             else: diagnostic['gitInfo']['buildNumber'] = '1'
-            with self.assertRaises(Error): validate_diagnostic(diagnostic, versions.resolve(FakeClient()), 999)
+            with self.assertRaises(Error): validate_diagnostic(diagnostic, self.release(), 999)
+
+    def test_bluemap_must_be_enabled_when_in_release(self):
+        active = versions.resolve(FakeClient())
+        diagnostic = self.diagnostic()
+        with self.assertRaises(Error): validate_diagnostic(diagnostic, active, 999)
+        diagnostic['bootstrapInfo']['plugins'].append({'name': 'BlueMap', 'enabled': True})
+        validate_diagnostic(diagnostic, active, 999)
+        old = {k: v for k, v in active.items() if k != 'bluemap'}
+        validate_diagnostic(self.diagnostic(), old, 999)
 
     def test_disabled_bedrock_identity_validation_is_rejected(self):
         diagnostic = self.diagnostic()
         diagnostic['config']['advanced']['bedrock']['validate-bedrock-login'] = False
-        with self.assertRaises(Error): validate_diagnostic(diagnostic, versions.resolve(FakeClient()), 999)
+        with self.assertRaises(Error): validate_diagnostic(diagnostic, self.release(), 999)
 
 
 class BackupTests(unittest.TestCase):
@@ -559,6 +602,35 @@ class BackupTests(unittest.TestCase):
         (self.runtime.data / 'level.dat').write_bytes(b'changed-world')
         with self.assertRaises(Error): backups.restore(self.runtime, path, Mock(), 10)
         self.assertEqual((self.runtime.data / 'level.dat').read_bytes(), b'changed-world')
+
+    def test_snapshot_excludes_regenerable_map_tiles(self):
+        tiles = self.runtime.data / 'bluemap/web/maps/world/tiles'
+        tiles.mkdir(parents=True)
+        (tiles / 'x.prbm.gz').write_bytes(b'tile')
+        (self.runtime.data / 'bluemap/web/index.html').write_text('webapp')
+        path = backups.snapshot(self.runtime)
+        with tarfile.open(path) as archive:
+            names = archive.getnames()
+        self.assertIn('data/bluemap/web/index.html', names)
+        self.assertFalse([n for n in names if n.startswith('data/bluemap/web/maps')])
+        backups.validate_archive(path, self.root / 'unused', extract=False)
+
+    def test_bluemap_core_config_created_once_and_only_with_eula(self):
+        real = Runtime(self.root)
+        with patch('mclan.runtime.os.chown'):
+            real.prepare_plugins(self.active)
+            self.assertFalse((self.runtime.data / 'plugins/BlueMap/core.conf').exists())
+            (self.runtime.data / 'eula.txt').write_text('eula=true\n')
+            real.prepare_plugins(self.active)
+            core = self.runtime.data / 'plugins/BlueMap/core.conf'
+            self.assertIn('accept-download: true', core.read_text())
+            self.assertIn('render-thread-count: 1', core.read_text())
+            core.write_text('accept-download: true\nrender-thread-count: 2\n')
+            real.prepare_plugins(self.active)
+            self.assertIn('render-thread-count: 2', core.read_text())
+            (self.runtime.data / 'plugins/BlueMap').rename(self.runtime.data / 'moved')
+            real.prepare_plugins({k: v for k, v in self.active.items() if k != 'bluemap'})
+            self.assertFalse((self.runtime.data / 'plugins/BlueMap').exists())
 
     def test_install_repeat_does_not_resolve_or_overwrite_world(self):
         args = argparse.Namespace(contact=None, lan_ip=None, minecraft_version=None,

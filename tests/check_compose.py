@@ -37,7 +37,8 @@ def check(binary=None):
         assert service['cap_drop'] == ['ALL']
         ports = {(p['target'], p['protocol'], str(p['published']), p['host_ip']) for p in service['ports']}
         assert ports == {(25565, 'tcp', '25565', '192.168.1.50'), (19132, 'udp', '19132', '192.168.1.50'),
-                         (19132, 'tcp', '19132', '192.168.1.50'), (19133, 'udp', '19133', '192.168.1.50')}
+                         (19132, 'tcp', '19132', '192.168.1.50'), (19133, 'udp', '19133', '192.168.1.50'),
+                         (8100, 'tcp', '8100', '192.168.1.50')}
         # NetherNet anuncia la IP LAN del host, nunca la del bridge de Docker.
         assert service['environment']['GEYSER_TRANSPORT'] == 'both'
         assert service['environment']['GEYSER_WEBRTC_PORT'] == '19133'
