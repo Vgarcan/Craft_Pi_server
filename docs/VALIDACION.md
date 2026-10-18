@@ -123,7 +123,7 @@ Registra los resultados al ejecutar la guía desde cero:
 | Conexión Bedrock desde otro dispositivo | Parcial: la conexión llegó a Paper y la whitelist la rechazó | Plataforma, versión, cuenta y juego |
 | Dos clientes en el mismo mundo | Pendiente | Interacción común observada |
 | Persistencia tras stop/start | Pendiente (el ciclo funciona; falta comprobar bloques e inventario) | Bloque, cofre e inventario conservados |
-| Arranque tras reboot del host | Pendiente | Servicio activo y conectividad posterior |
+| Arranque tras reboot del host | **Verificado** (18-10-2026): `healthy` y puertos respondiendo sin intervención | Servicio activo y conectividad posterior |
 | Respeto de parada manual tras reboot | Pendiente | Permanece parado hasta `start` |
 | Backup y restore de prueba | **Backup verificado**; restore ensayado en copia aislada | Copia verificada y retorno al estado previo |
 | Carga inicial de 2–4 jugadores | Pendiente | Memoria, CPU, temperatura y rendimiento percibido |

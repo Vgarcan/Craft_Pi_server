@@ -71,15 +71,28 @@ No había cambios locales sin commit en el repositorio de `/opt`. `server.proper
 
 | Cambio | Reversión | Estado |
 | --- | --- | --- |
-| `cgroup_enable=memory` añadido a `/boot/firmware/cmdline.txt` | Restaurar `/boot/firmware/cmdline.txt.pre-craftpi-20261018` | Implementado; **pendiente de reinicio y auditoría** |
-| Arranque por defecto `multi-user.target` (sin escritorio) | `sudo systemctl set-default graphical.target` | Implementado; pendiente de reinicio |
-| Whitelist: añadir al jugador Bedrock que intentó entrar | `manage.sh command "whitelist remove NOMBRE"` | Floodgate no encontró su XUID en la caché de GeyserMC; se añade por nombre con el jugador conectado |
+| `cgroup_enable=memory` añadido a `/boot/firmware/cmdline.txt` | Restaurar `/boot/firmware/cmdline.txt.pre-craftpi-20261018` | **Verificado tras reinicio**: `memory` en `cgroup.controllers`; contenedor recreado con `Memory=3221225472` y `MemorySwap=3221225472` |
+| Arranque por defecto `multi-user.target` (sin escritorio) | `sudo systemctl set-default graphical.target` | **Verificado tras reinicio**: sin sesión gráfica |
+| Whitelist: añadir al jugador Bedrock que intentó entrar | `manage.sh command "whitelist remove NOMBRE"` | **No aplicado.** Floodgate no encontró su XUID en la caché de GeyserMC. Abrir la whitelist temporalmente para añadirlo conectado quedó bloqueado por la política de permisos del asistente; lo decide el operador |
 
 Auditoría previa al reinicio (`tools/audit.sh --verify`): dos FALLO esperados (cgroup de memoria y `Memory=0` en el contenedor); el resto OK.
 
+### Reinicio de la Pi (18-10-2026, 18:25)
+
+| Prueba | Resultado |
+| --- | --- |
+| Arranque automático tras `reboot` | **Verificado**: el servidor quedó `healthy` sin intervención. Java Status, RakNet y signaling TCP respondían en la IP LAN antes de usar `sudo` |
+| Límite de memoria | El contenedor existente conservaba `Memory=0`, como se preveía. Tras `stop`, `compose rm` y `start` se aplica 3 GiB (`docker stats`: 981 MiB / 3 GiB) |
+| `tools/audit.sh --verify` tras recrear | **Sin fallos**. Avisos: whitelist activa y vacía, y backups en la misma microSD |
+| Recursos en reposo, sin jugadores | Java ~1,0 GiB; 1,57 GiB disponibles; swap 0; 52,7 °C; `throttled=0x0` |
+
+La memoria disponible incluye la sesión de administración: VS Code Server por SSH, sus extensiones y el asistente ocupan del orden de 1 GiB. Con la sesión cerrada queda más margen. Mide la carga con jugadores sin esa sesión abierta, o descuéntala.
+
+Tras el reinicio, `sudo` vuelve a pedir contraseña: es el comportamiento normal de la Pi, no un fallo.
+
 ### Pendiente de la fase 1
 
-- Reiniciar, recrear el contenedor una vez para aplicar el límite de 3 GiB y repetir `tools/audit.sh --verify`.
+- Añadir jugadores a la whitelist (decisión del operador; ver README, sección 12).
 - Reservar la IP de la Pi en el router (reserva DHCP).
 - Copiar los backups fuera de la microSD.
 
@@ -94,7 +107,7 @@ Nada de esta fase puede verificarse sin clientes. Anota versión, plataforma, re
 | Java y Bedrock en el mismo mundo a la vez | Pendiente | Se ven, interactúan y editan los mismos bloques |
 | Inventarios separados Java/Bedrock | Esperado por diseño: Floodgate crea otra identidad (prefijo `.`) | Confirmar que no se mezclan |
 | Persistencia tras `restart` | Pendiente | Bloque colocado, cofre e inventario conservados |
-| Persistencia y arranque tras reiniciar la Pi | Pendiente | `sudo reboot`, después `status` y `verify` sin intervención |
+| Persistencia y arranque tras reiniciar la Pi | **Arranque verificado** (18-10-2026); persistencia de bloques e inventario pendiente de jugadores | `sudo reboot`, después `status` y `verify` sin intervención |
 | Parada manual respetada tras reboot | Pendiente | Tras `stop` y `reboot`, el servidor sigue parado |
 | Bedrock 26.60 por NetherNet | Pendiente de publicación (27-10-2026) y de una build de Geyser compatible | `update --plan`; confirmación *trust on first use* |
 | QuestCraft | Pendiente. Ver [EVALUACION_WEB.md](EVALUACION_WEB.md), sección QuestCraft, para versiones compatibles | Versión de QuestCraft, versión Java que lanza, resultado |
