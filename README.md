@@ -509,6 +509,26 @@ El helper lee los `.dat` NBT con un lector propio de sólo lectura (`panel/nbt.p
 - Zonas táctiles de 40 px o más en todo, salvo los huecos de la barra de objetos a 320 y 360 px (34 y 39 px). Cumplen el mínimo WCAG 2.2 AA de 24 px y conservan las 9 casillas del juego.
 - CSS y JS llevan la huella del contenido en la URL, así que un despliegue nunca deja al navegador con la versión anterior.
 
+**Biblioteca de mundos** (World → World library), hasta 50 mundos y **uno activo**, siempre en los puertos de siempre: nadie cambia de dirección.
+
+```bash
+sudo ./manage.sh world list
+sudo ./manage.sh world create "Creative build" --seed 424242
+sudo ./manage.sh world import imports/mundo.zip "Mi mundo Java"
+sudo ./manage.sh world import imports/mundo.mcworld "Mi mundo Bedrock"
+sudo ./manage.sh world activate creative-build     # pide CAMBIAR
+sudo ./manage.sh world export main --format java   # o --format bedrock → exports/
+sudo ./manage.sh world rename skyblock "Skyblock 2"
+sudo ./manage.sh world delete skyblock             # archiva en backups/worlds y borra
+```
+
+- **Dónde está cada cosa:** el mundo activo está en `data/world`. Los demás, en `worlds/<id>/world`, con su mapa de BlueMap en `worlds/<id>/bluemap-maps`. Los backups normales sólo incluyen el mundo activo.
+- **Qué guarda cada mundo:** sus inventarios y datos de jugador (Minecraft 26.x los guarda dentro del mundo), su borde, su spawn y sus ajustes (dificultad, modo, PvP, vuelo, protección del spawn, semilla). Whitelist, operadores y bans son del servidor.
+- **Activar** para limpio el servidor, hace un backup verificado `pre-switch-<id>`, intercambia mundo, mapa y ajustes, y verifica. Si el mundo nuevo no arranca, deshace el intercambio y vuelve a arrancar el anterior. Un mundo nuevo se genera con su semilla en el primer arranque. Un mundo Bedrock importado recalcula su luz automáticamente la primera vez.
+- **Importar:** copia el archivo a `imports/`, por ejemplo arrastrándolo en VS Code (la carpeta es del administrador). La extracción es segura (sin rutas, enlaces ni tamaños anómalos) y rechaza mundos de una versión más nueva que la del servidor. Bedrock se convierte con Chunker 1.21.0, fijado por SHA-256, en un contenedor sin red. Pierde animales, monstruos, objetos en el suelo, barcas y vagonetas con cofre.
+- **Exportar:** genera un zip Java o un `.mcworld` en `exports/` con su `.sha256`, descargable desde el panel en streaming.
+- **Restore** sabe a qué mundo pertenece cada backup (`data/.mclan-world`). Si es de otro mundo, guarda el activo en la biblioteca y aparta en `state/pre-restore-world-*` la copia anterior del mundo entrante: no se pierde nada.
+
 **La consola ejecuta comandos de operador** (give, tp, op…), igual que `manage.sh command`. Las reglas:
 
 - Sólo una línea imprimible de hasta 256 caracteres.

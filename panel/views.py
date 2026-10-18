@@ -453,7 +453,7 @@ class Views:
         cards = ''
         for w in lib['worlds']:
             size = f'{w["size"] / 2**20:.0f} MiB' if isinstance(w.get('size'), (int, float)) else '—'
-            source = {'existing': 'Original', 'new': 'Generated', 'import-java': 'Imported (Java)',
+            source = {'existing': 'Original', 'new': 'New world', 'import-java': 'Imported (Java)',
                       'import-bedrock': 'Imported (Bedrock)', 'restored': 'Restored'}.get(w.get('source'), w.get('source') or '')
             state = (self.pill('ok', 'Active') if w['active'] else
                      self.pill('', 'Stored') if w['generated'] else self.pill('warn', 'Not generated yet'))

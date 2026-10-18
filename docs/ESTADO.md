@@ -238,3 +238,10 @@ Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa
 - **CSP endurecida:** sin `unsafe-inline`.
 - **Verificación:** vista previa local con Chromium sin pantalla (escritorio 1440 px y móvil 412 px), sin violaciones de CSP ni errores de JavaScript. 107 pruebas automatizadas.
 - **Pregeneración terminada:** 40.401 chunks en 25 min 04 s, a 16–24 chunks/s, con un máximo de unos 70 °C y sin throttling.
+
+## Biblioteca de mundos (implementada, pendiente de hardware)
+
+- Hasta 50 mundos y uno activo en los puertos de siempre, como decidió el operador.
+- **Núcleo:** `scripts/mclan/worlds.py` y `manage.sh world …`. **Panel:** World → World library.
+- **Pruebas automatizadas:** cambio de mundo con intercambio real de mundo, mapa y ajustes; mundo nuevo con semilla; marcha atrás si no arranca; importación con rechazos de seguridad; exportación verificada; borrado con archivo previo; restore de un backup de otro mundo sin perder el activo; rutas y descargas del panel. 124 pruebas en total.
+- **Pendiente en la Pi:** desplegar (requiere `sudo`). Después, primer cambio real de mundo, importar y exportar un mundo y medir los tiempos.

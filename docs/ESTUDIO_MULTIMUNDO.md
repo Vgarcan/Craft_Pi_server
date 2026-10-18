@@ -1,6 +1,8 @@
 # Estudio: varios mundos con puertos propios
 
-Estudio del 18-10-2026, previo a cualquier cambio. **No se ha implementado nada**: el servidor actual sigue igual.
+Estudio del 18-10-2026, previo a cualquier cambio.
+
+> **Decisión del operador:** biblioteca de hasta **50 mundos** con **un único mundo activo** en los puertos de siempre, sin puertos por mundo. Se ha implementado así (README, sección 15, «Biblioteca de mundos»). Este documento conserva el estudio original de las opciones.
 
 ## 1. Qué se pide
 
