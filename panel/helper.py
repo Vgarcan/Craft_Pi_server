@@ -189,10 +189,13 @@ class Panel:
         result = run(args, capture=True, check=False)
         return result.stdout + result.stderr
 
-    def paper_logs(self, archives=2):
-        """Logs de Paper en data/logs: sobreviven a recrear el contenedor, a diferencia de docker logs."""
+    def paper_logs(self, hours=72, archives=40):
+        """Logs de Paper en data/logs: sobreviven a recrear el contenedor, a diferencia de docker logs.
+        Paper rota el archivo en cada arranque, así que se lee una ventana de tiempo, no un número fijo."""
         folder = self.runtime.data / 'logs'
-        older = sorted(folder.glob('*.log.gz'), key=lambda p: p.stat().st_mtime)[-archives:]
+        cutoff = time.time() - hours * 3600
+        older = [p for p in sorted(folder.glob('*.log.gz'), key=lambda p: p.stat().st_mtime)
+                 if p.stat().st_mtime >= cutoff][-archives:]
         parts = []
         for path in older:
             try:
