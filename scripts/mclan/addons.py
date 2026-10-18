@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ADDONS = {"mclan_skins": ("mclan-skins", "MclanSkins.jar")}
 LIBRARY = re.compile(r"META-INF/libraries/(?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+\.jar")
 # Plugins de la release que cada addon necesita para compilar (además de paper-api).
-CLASSPATH = {"mclan_skins": ("floodgate-spigot.jar",)}
+CLASSPATH = {"mclan_skins": ("floodgate-spigot.jar", "Geyser-Spigot.jar")}
 
 
 def source_files(folder):

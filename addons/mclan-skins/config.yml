@@ -1,6 +1,5 @@
 # Qué ven los jugadores Java de un jugador Bedrock (se aplica al conectarse; reinicia para cambiarlo).
-#   default:   la skin por defecto (Steve/Alex). Los jugadores Bedrock ven la skin Bedrock original,
-#              con su forma propia.
-#   converted: la conversión a Java de la API de GeyserMC, que pierde la geometría propia. Los
-#              jugadores Bedrock también ven esa conversión (comportamiento original de Geyser).
+#   default:   la skin por defecto (Steve/Alex).
+#   converted: la conversión a Java de la API de GeyserMC, que pierde la geometría propia.
+# En los dos casos, los jugadores Bedrock ven la skin Bedrock original, con su forma y de cualquier tamaño.
 java-skin: default

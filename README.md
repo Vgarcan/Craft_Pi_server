@@ -206,8 +206,8 @@ La evidencia documental anterior no sustituye el ensayo de arranque. Floodgate n
 **Skins de Bedrock.** Floodgate aplica por defecto a cada jugador Bedrock la conversión Java de su skin, hecha por la API de GeyserMC. Java sólo admite el cuerpo humano estándar en 64×64, así que una skin con forma propia queda «aplanada». Además, Geyser manda esa conversión también a los clientes Bedrock. Desde la 0.7.0, el addon propio **MclanSkins** (`addons/mclan-skins`) cancela esa aplicación:
 
 - **Jugadores Java:** ven la skin por defecto (Steve/Alex).
-- **Jugadores Bedrock:** ven la skin Bedrock original con su geometría, también la propia. Geyser no conserva las skins del creador de personajes (persona) ni las de más de 128×128; esas se ven por defecto en todos los clientes.
-- **Volver al comportamiento de Geyser:** `java-skin: converted` en `data/plugins/MclanSkins/config.yml` y reiniciar.
+- **Jugadores Bedrock:** ven la skin Bedrock original con su geometría, también la propia. Geyser sólo guarda en su caché las de hasta 128×128 que no son persona; las demás (hasta 512×512) las guarda el addon al iniciar sesión con el método interno de Geyser. Si una build futura lo cambia, el addon lo avisa en el log y esas skins se ven por defecto.
+- **Que Java vea la conversión:** `java-skin: converted` en `data/plugins/MclanSkins/config.yml` y reiniciar. Bedrock sigue viendo la original (evento oficial `SessionSkinApplyEvent`).
 - **Cambiar de skin:** se aplica al volver a conectar. Geyser no traduce los cambios de skin en mitad de la partida.
 - **Compilación:** `manage.sh update` lo compila en la Pi, contra las librerías exactas de la release (`paper-api` incluida en `paper.jar` y la API de Floodgate), en un contenedor `eclipse-temurin:<java>-jdk-jammy` fijado por digest y sin red. El hash del código forma parte de la identidad de la release.
 

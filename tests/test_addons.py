@@ -28,13 +28,14 @@ class AddonTests(unittest.TestCase):
             jar.writestr('META-INF/libraries/net/kyori/adventure-key/5/adventure-key-5.jar', b'key')
             jar.writestr('META-INF/versions/26.3/server-26.3.jar.patch', b'not a library')
         (self.release / 'floodgate-spigot.jar').write_bytes(b'floodgate')
+        (self.release / 'Geyser-Spigot.jar').write_bytes(b'geyser')
 
     def tearDown(self):
         self.temp.cleanup()
 
     def test_identity_follows_the_source_code(self):
         entry = addons.describe(self.root)['mclan_skins']
-        self.assertEqual(entry['version'], '1.0.0')
+        self.assertEqual(entry['version'], '1.1.0')
         self.assertEqual(entry, addons.describe(ROOT)['mclan_skins'])
         java = self.root / 'addons/mclan-skins/src/dev/mclan/skins/MclanSkins.java'
         java.write_text(java.read_text() + '\n')
@@ -57,7 +58,7 @@ class AddonTests(unittest.TestCase):
             calls.append(args)
             mounts = {args[i + 1].split(':')[1]: args[i + 1].split(':')[0] for i, a in enumerate(args) if a == '-v'}
             classpath = sorted(os.listdir(mounts['/cp']))
-            self.assertEqual(classpath, ['000-paper-api-26.3.jar', '001-adventure-key-5.jar', 'floodgate-spigot.jar'])
+            self.assertEqual(classpath, ['000-paper-api-26.3.jar', '001-adventure-key-5.jar', 'Geyser-Spigot.jar', 'floodgate-spigot.jar'])
             self.assertTrue((Path(mounts['/src']) / 'src/dev/mclan/skins/MclanSkins.java').exists())
             with zipfile.ZipFile(Path(mounts['/out']) / 'addon.jar', 'w') as jar:
                 jar.writestr('plugin.yml', 'name: MclanSkins')

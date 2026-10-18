@@ -309,3 +309,11 @@ Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa
 - **Pruebas:** 132, entre ellas identidad por código, compilación sin red con montajes de sólo lectura y rechazo de enlaces y de código cambiado durante la actualización.
 - **Depuración temporal:** `debug-mode: true` en la configuración de Geyser para ver el tipo de skin al conectar. Se retira después.
 - **Pendiente de hardware:** compilación real en la Pi y comprobación visual en Bedrock (propia y de otros jugadores Bedrock) y en Java.
+
+### MclanSkins 1.1.0: skins grandes (19-10-2026)
+
+- **Verificado en hardware con la 1.0.0:** el plugin cargaba y Java dejaba de recibir la conversión. Pero el jugador seguía viendo una skin por defecto.
+- **Causa** (registro de depuración de Geyser): «Unable to load bedrock skin … The size of '.Xeministrator' skin is: 256x256». Geyser no guarda en caché las skins de más de 128×128 ni las persona, así que su respaldo era la skin por defecto.
+- **Cambio:** al iniciar sesión (`SessionLoginEvent`, antes de construir la lista de jugadores), el addon guarda esas skins (hasta 512×512) y su geometría con `SkinProvider.storeBedrockSkin`/`storeBedrockGeometry` de Geyser, por reflexión. Si no existen, avisa y no falla.
+- **Modo `converted`:** usa `SessionSkinApplyEvent` para que Bedrock vea la original.
+- **Compilación:** el addon se compila también contra `Geyser-Spigot.jar`. Un cambio incompatible en Geyser hace fallar `update` antes de parar el servidor.
