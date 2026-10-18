@@ -482,7 +482,7 @@ Desde la 0.4.0 la interfaz está **en inglés** y tiene un estilo inspirado en M
 | Página (tecla) | Qué permite |
 | --- | --- |
 | Dashboard (1) | Estado y salud (corazones), jugadores conectados, memoria y temperatura en vivo, direcciones de conexión (clic para copiar), acciones y versiones |
-| Players (2) | Whitelist: activar o desactivar; añadir Java, Bedrock (gamertag) o Bedrock por XUID; quitar; **intentos rechazados** de las últimas 72 horas con «Allow» y «Open 5 min and wait»; apertura temporal |
+| Players (2) | **Perfiles** de cada jugador conocido (abajo). Whitelist: activar o desactivar; añadir Java, Bedrock (gamertag) o Bedrock por XUID; quitar; **intentos rechazados** de las últimas 72 horas con «Allow» y «Open 5 min and wait»; apertura temporal |
 | World (3) | BlueMap (abrir, pausar o reanudar el render, desactivar o activar), borde del mundo, progreso de Chunky y ajustes de `server.properties` (guardar reinicia) |
 | Console (4) | Terminal con logs en vivo (sin el ruido del healthcheck) y **comandos de juego** con historial (↑↓), autocompletado (Tab) y atajos |
 | Backups (5) | Crear backup y últimas copias |
@@ -490,6 +490,24 @@ Desde la 0.4.0 la interfaz está **en inglés** y tiene un estilo inspirado en M
 | Live map (7) | BlueMap centrado en el spawn |
 | Account (8) | Cambio de contraseña |
 | Log out (9) | Cerrar sesión |
+
+**Perfiles de jugador** (`/players/<uuid>`):
+
+- Ficha: edición, en línea, operador, whitelist, ban y su motivo, UUID y XUID, primera y última conexión, tiempo jugado y modo de juego.
+- Vitales: corazones, hambre, saturación, nivel y barra de experiencia, habilidades.
+- Ubicación actual, punto de reaparición y última muerte, con enlace al mapa en esa posición. Con el jugador conectado, posición y vida se leen en vivo.
+- Inventario en cuadrícula del juego (armadura, mano secundaria, barra rápida) y cofre de ender, con los iconos reales.
+- Estadísticas (distancias, muertes, bajas, daño…) y clasificaciones de bloques minados, mobs abatidos, causas de muerte, objetos fabricados, usados y recogidos.
+- Logros completados (sin recetas).
+- **Políticas:** operador, whitelist, ban y unban, modo de juego, kick, llevar al spawn, curar y alimentar. Sólo sobre jugadores conocidos, con nombres validados, y registradas en `logs/operations.log`.
+
+El helper lee los `.dat` NBT con un lector propio de sólo lectura (`panel/nbt.py`) con límites de tamaño, profundidad y elementos, y sin seguir enlaces en `data/`.
+
+**Móvil.** Auditado con emulación real de dispositivo (Chrome DevTools Protocol) en 320, 360, 390, 412 y 768 px:
+
+- Sin desbordes horizontales ni elementos fuera de pantalla, sin textos de menos de 12 px y sin contenido tapado por la barra.
+- Zonas táctiles de 40 px o más en todo, salvo los huecos de la barra de objetos a 320 y 360 px (34 y 39 px). Cumplen el mínimo WCAG 2.2 AA de 24 px y conservan las 9 casillas del juego.
+- CSS y JS llevan la huella del contenido en la URL, así que un despliegue nunca deja al navegador con la versión anterior.
 
 **La consola ejecuta comandos de operador** (give, tp, op…), igual que `manage.sh command`. Las reglas:
 

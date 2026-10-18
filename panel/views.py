@@ -43,6 +43,16 @@ PROPERTY_FORM = (
 # conserva su capa de hierba arriba.
 HILLS_FRONT = (3, 3, 4, 4, 5, 4, 3, 3, 2, 2, 3, 4, 4, 4, 3, 2, 2, 3, 3, 4, 5, 5, 4, 3, 3, 2, 3, 3, 4, 4, 3, 2)
 HILLS_BACK = (4, 5, 5, 6, 6, 5, 4, 4, 5, 6, 6, 6, 5, 4, 3, 4, 5, 5, 6, 5, 4, 4, 5, 6, 6, 5, 4, 3, 4, 5, 6, 5)
+STAT_LABELS = (
+    ('play_time', 'Time played', 'ticks'), ('deaths', 'Deaths', 'count'), ('mob_kills', 'Mob kills', 'count'),
+    ('player_kills', 'Player kills', 'count'), ('walk_one_cm', 'Walked', 'cm'), ('sprint_one_cm', 'Sprinted', 'cm'),
+    ('swim_one_cm', 'Swum', 'cm'), ('fly_one_cm', 'Flown', 'cm'), ('boat_one_cm', 'By boat', 'cm'), ('jump', 'Jumps', 'count'),
+    ('damage_dealt', 'Damage dealt', 'damage'), ('damage_taken', 'Damage taken', 'damage'),
+    ('time_since_death', 'Since last death', 'ticks'), ('leave_game', 'Sessions', 'count'),
+    ('open_chest', 'Chests opened', 'count'), ('traded_with_villager', 'Villager trades', 'count'),
+    ('animals_bred', 'Animals bred', 'count'), ('fish_caught', 'Fish caught', 'count'), ('sleep_in_bed', 'Nights slept', 'count'),
+)
+GAMEMODE_LABELS = {'survival': 'Survival', 'creative': 'Creative', 'adventure': 'Adventure', 'spectator': 'Spectator'}
 CONSOLE_SHORTCUTS = ('list', 'time set day', 'weather clear', 'tps', 'say Hello from the panel!', 'worldborder get')
 
 
@@ -50,9 +60,34 @@ def e(value):
     return html.escape(str(value), quote=True)
 
 
+def pretty(identifier):
+    return str(identifier).replace('_', ' ').replace('/', ' › ').capitalize()
+
+
+def amount(value, unit):
+    if not isinstance(value, (int, float)):
+        return '—'
+    if unit == 'ticks':
+        minutes = int(value) // 1200
+        return f'{minutes // 60} h {minutes % 60} min' if minutes >= 60 else f'{minutes} min'
+    if unit == 'cm':
+        return f'{value / 100000:.2f} km' if value >= 100000 else f'{value / 100:.0f} m'
+    if unit == 'damage':
+        return f'{value / 20:.0f} ♥'  # en décimas de corazón: 20 = 1 corazón completo
+    return f'{value:,}'.replace(',', ' ')
+
+
+def moment(millis):
+    if not isinstance(millis, (int, float)) or millis <= 0:
+        return '—'
+    return time.strftime('%Y-%m-%d %H:%M', time.localtime(millis / 1000))
+
+
 class Views:
-    def __init__(self, assets=frozenset()):
+    def __init__(self, assets=frozenset(), version=''):
         self.assets = set(assets)
+        # Huella de app.css + app.js: cada despliegue cambia la URL y el navegador no usa la versión vieja.
+        self.version = version
 
     # --- Componentes ------------------------------------------------------------------------
     def texture(self, name, alt='', cls='tex'):
@@ -60,6 +95,22 @@ class Views:
         if f'{name}.png' not in self.assets:
             return ''
         return f'<img class="{cls}" src="/assets/{e(name)}.png" alt="{e(alt)}" width="16" height="16" loading="lazy">'
+
+    def item_icon(self, identifier, cls='item-icon'):
+        """Icono de un objeto o mob: textura de objeto, de bloque, o huevo de generación."""
+        for name in (f'item_{identifier}', f'block_{identifier}', f'block_{identifier}_side', f'block_{identifier}_front',
+                     f'block_{identifier}_top', f'item_{identifier}_spawn_egg'):
+            if f'{name}.png' in self.assets:
+                return f'<img class="{cls}" src="/assets/{e(name)}.png" alt="" width="16" height="16" loading="lazy">'
+        return f'<span class="{cls} missing">{e(str(identifier)[:2].upper())}</span>'
+
+    def slot(self, item=None, empty_label=''):
+        if not item:
+            return f'<div class="inv-slot empty" title="{e(empty_label)}"></div>'
+        count = item.get('count') or 1
+        return (f'<div class="inv-slot" title="{e(pretty(item["id"]))}" tabindex="0">{self.item_icon(item["id"])}'
+                + (f'<span class="count">{e(count)}</span>' if count != 1 else '')
+                + f'<span class="tooltip">{e(pretty(item["id"]))}{f" × {e(count)}" if count != 1 else ""}</span></div>')
 
     @staticmethod
     def csrf(session):
@@ -122,9 +173,9 @@ class Views:
             '<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'{meta}<title>{e(title)} · Craft Pi Server</title>'
-            '<link rel="stylesheet" href="/static/app.css">'
+            f'<link rel="stylesheet" href="/static/app.css?v={e(self.version)}">'
             + ('<link rel="icon" href="/assets/grass_block_side.png">' if 'grass_block_side.png' in self.assets else '')
-            + f'<script src="/static/app.js" defer></script></head>'
+            + f'<script src="/static/app.js?v={e(self.version)}" defer></script></head>'
             f'<body class="{e(slug)}{" with-assets" if self.assets else ""}"{csrf}>'
             '<div class="scene" aria-hidden="true"><div class="layer sky"></div><div class="layer sun"></div>'
             '<div class="layer clouds far"></div><div class="layer clouds near"></div>'
@@ -227,6 +278,129 @@ class Views:
         if status['rejected']:
             items.append(('warn', f'{len(status["rejected"])} player(s) were rejected by the whitelist. See Players.'))
         return ''.join(f'<div class="alert {k}">{e(t)}</div>' for k, t in items)
+
+    def known(self, players):
+        rows = []
+        for p in players:
+            state = self.pill('ok', 'Online') if p['online'] else self.pill('', 'Offline')
+            tags = ''.join(t for t in (self.pill('warn', 'OP') if p['op'] else '', self.pill('bad', 'Banned') if p['banned'] else '',
+                                       self.pill('ok', 'Whitelisted') if p['whitelisted'] else '') if t)
+            rows.append((f'<a class="player-link" href="/players/{e(p["uuid"])}" data-nav>{self.texture("name_tag", "", "icon")}'
+                         f'{e(p["name"])}</a>', EDITIONS.get(p['edition'], ''), f'{state} {tags}', e(moment(p['last_played']))))
+        return self.card('Known players', self.table(('Player', 'Edition', 'Status', 'Last seen'), rows,
+                                                     'Nobody has joined yet') +
+                         '<p class="muted">Open a player to see their profile, inventory, statistics and server policies.</p>',
+                         icon=self.texture('totem_of_undying', '', 'icon'))
+
+    def profile(self, p, session, map_base, spawn):
+        name, vitals, location, stats = p['name'], p['vitals'], p['location'], p['stats']
+        uuid = p['uuid']
+        badges = ''.join(t for t in (
+            self.pill('ok', 'Online') if p['online'] else self.pill('', 'Offline'),
+            self.pill('', EDITIONS.get(p['edition'], '')),
+            self.pill('warn', f'Operator (level {p["op_level"]})') if p['op'] else '',
+            self.pill('bad', 'Banned') if p['banned'] else '',
+            self.pill('ok', 'Whitelisted') if p['whitelisted'] else self.pill('bad', 'Not whitelisted')) if t)
+        ids = f'<p class="muted mono">UUID {e(uuid)}' + (f' · XUID {e(p["xuid"])}' if p.get('xuid') else '') + '</p>'
+        ban = ''
+        if p.get('ban'):
+            ban = (f'<div class="alert bad">Banned {e(p["ban"].get("created") or "")} by {e(p["ban"].get("source") or "?")}: '
+                   f'{e(p["ban"].get("reason") or "no reason")} (expires: {e(p["ban"].get("expires") or "never")})</div>')
+        header = (f'<section class="panel nameplate"><div class="plate"><span class="head" aria-hidden="true"></span>'
+                  f'<div><h2 class="player-name">{e(name)}</h2><p class="badges">{badges}</p>{ids}</div></div>{ban}'
+                  f'<div class="facts"><span><b>First joined</b>{e(moment(p.get("first_played")))}</span>'
+                  f'<span><b>Last seen</b>{e("now" if p["online"] else moment(p.get("last_played")))}</span>'
+                  f'<span><b>Time played</b>{e(amount(stats["custom"].get("play_time"), "ticks"))}</span>'
+                  f'<span><b>Game mode</b>{e(GAMEMODE_LABELS.get(vitals.get("gamemode"), "—"))}</span></div></section>')
+        health = vitals.get('health') if isinstance(vitals.get('health'), (int, float)) else 0
+        food = vitals.get('food') if isinstance(vitals.get('food'), (int, float)) else 0
+        hearts = ''.join(f'<span class="heart{" empty" if i * 2 >= round(health) else ""}">{self.texture("heart", "", "heart-img")}</span>'
+                         for i in range(10))
+        drums = ''.join(f'<span class="food{" empty" if i * 2 >= round(food) else ""}">{self.texture("food", "", "heart-img")}</span>'
+                        for i in range(10))
+        xp = vitals.get('xp_progress') or 0
+        saturation = f"{(vitals.get('saturation') or 0):.1f}"
+        abilities = ', '.join(pretty(k) for k, v in (vitals.get('abilities') or {}).items() if v and k != 'mayBuild') or 'none'
+        vitals_card = self.card('Vitals', f'<div class="hearts">{hearts}</div><p class="muted">Health {e(f"{health:.0f}")}/20</p>'
+                                f'<div class="hearts">{drums}</div><p class="muted">Hunger {e(f"{food:.0f}")}/20 · saturation '
+                                f'{e(saturation)}</p>'
+                                f'<p class="big xp-level">Level {e(vitals.get("xp_level") or 0)}</p>{self.bar(xp * 100, "xp", "experience")}'
+                                f'<p class="muted">Total XP {e(vitals.get("xp_total") or 0)} · abilities: {e(abilities)}</p>',
+                                icon=self.texture('golden_apple', '', 'icon'))
+        def where(entry):
+            if not entry or not entry.get('pos'):
+                return '—'
+            x, y, z = (round(v) for v in entry['pos'][:3])
+            link = ''
+            if map_base and entry.get('dimension') in ('overworld', ''):
+                link = (f' <a class="mc-btn small" href="{e(map_base)}#world:{x}:{y}:{z}:80:0:0:0:0:perspective" '
+                        'target="_blank" rel="noopener">Map</a>')
+            return f'<span class="mono">{e(pretty(entry.get("dimension") or "overworld"))} {x}, {y}, {z}</span>{link}'
+        location_card = self.card('Location', self.table(('', ''), [
+            ('Current', where({'dimension': location.get('dimension'), 'pos': location.get('pos')})),
+            ('Respawn point', where(location.get('respawn')) if location.get('respawn') else
+             f'World spawn <span class="mono">{e(", ".join(str(v) for v in spawn or []))}</span>'),
+            ('Last death', where(location.get('death')))], ''), icon=self.texture('compass_00', '', 'icon'))
+        inventory = {item['slot']: item for item in p['inventory'] if isinstance(item.get('slot'), int)}
+        main = ''.join(self.slot(inventory.get(i)) for i in range(9, 36))
+        hotbar = ''.join(self.slot(inventory.get(i)) for i in range(9))
+        equipment = p.get('equipment') or {}
+        armor = ''.join(self.slot(equipment.get(s) or inventory.get(n), label)
+                        for s, n, label in (('head', 103, 'Helmet'), ('chest', 102, 'Chestplate'), ('legs', 101, 'Leggings'),
+                                            ('feet', 100, 'Boots')))
+        offhand = self.slot(equipment.get('offhand') or inventory.get(-106), 'Off hand')
+        ender = {item['slot']: item for item in p['ender_chest'] if isinstance(item.get('slot'), int)}
+        inventory_card = self.card('Inventory', f'<div class="inventory"><div class="inv-side"><div class="inv-armor">{armor}</div>'
+                                   f'<div class="inv-offhand">{offhand}</div></div><div class="inv-main"><div class="inv-grid">{main}</div>'
+                                   f'<div class="inv-grid hotbar-row">{hotbar}</div></div></div>'
+                                   + ('<p class="muted">Inventory is empty.</p>' if not p['inventory'] and not equipment else '')
+                                   + '<details><summary>Ender chest</summary><div class="inv-grid">'
+                                   + ''.join(self.slot(ender.get(i)) for i in range(27)) + '</div></details>'
+                                   + ('<p class="muted">Inventory comes from the last autosave while the player is online.</p>'
+                                      if p['online'] else ''), 'wide', icon=self.texture('chest_minecart', '', 'icon'))
+        headline = ''.join(f'<div class="stat"><span class="stat-value">{e(amount(stats["custom"].get(key), unit))}</span>'
+                           f'<span class="stat-label">{e(label)}</span></div>'
+                           for key, label, unit in STAT_LABELS if key in stats['custom'])
+        def ranking(title, entries):
+            if not entries:
+                return ''
+            rows = ''.join(f'<li>{self.item_icon(i["id"])}<span>{e(pretty(i["id"]))}</span><b>{e(i["count"])}</b></li>' for i in entries)
+            return f'<div class="ranking"><h3>{e(title)}</h3><ol>{rows}</ol></div>'
+        rankings = ''.join(ranking(t, stats.get(k)) for t, k in (('Blocks mined', 'mined'), ('Mobs killed', 'killed'),
+                                                                   ('Killed by', 'killed_by'), ('Items crafted', 'crafted'),
+                                                                   ('Items used', 'used'), ('Picked up', 'picked_up')))
+        stats_card = self.card('Statistics', f'<div class="stat-grid">{headline or "<p class=muted>No statistics yet.</p>"}</div>'
+                               f'<div class="rankings">{rankings}</div>', 'wide', icon=self.texture('writable_book', '', 'icon'))
+        advancements = ''.join(f'<li>{self.texture("experience_bottle", "", "icon")}{e(pretty(a))}</li>' for a in p['advancements'])
+        advancements_card = self.card(f'Advancements ({len(p["advancements"])})',
+                                      f'<ul class="advancements">{advancements or "<li class=muted>None yet</li>"}</ul>',
+                                      icon=self.texture('nether_star', '', 'icon'))
+        action = f'/players/{uuid}'
+        modes = ''.join(f'<option value="{m}"{" selected" if m == vitals.get("gamemode") else ""}>{label}</option>'
+                        for m, label in GAMEMODE_LABELS.items())
+        online_only = '' if p['online'] else ' disabled'
+        policy = (
+            '<div class="row">'
+            + (self.button(action, {'do': 'deop'}, 'Remove operator', session, 'danger', f'Remove operator rights from {name}?')
+               if p['op'] else self.button(action, {'do': 'op'}, 'Make operator', session, '',
+                                           f'Give {name} operator rights? They will be able to run any command.'))
+            + (self.button('/players', {'do': 'remove', 'name': name}, 'Remove from whitelist', session, 'danger',
+                           f'Remove {name} from the whitelist?') if p['whitelisted'] else '')
+            + (self.button(action, {'do': 'pardon'}, 'Unban', session, 'primary') if p['banned'] else
+               self.button(action, {'do': 'ban'}, 'Ban', session, 'danger', f'Ban {name}? They will be kicked and blocked.'))
+            + '</div>'
+            f'<form class="row gamemode" method="post" action="{e(action)}">{self.csrf(session)}<input type="hidden" name="do" value="gamemode">'
+            f'<label for="gm">Game mode</label><select id="gm" name="mode">{modes}</select>'
+            f'<button class="mc-btn"{online_only}>Apply</button></form>'
+            '<div class="row">'
+            + self.button(action, {'do': 'kick'}, 'Kick', session, 'danger', f'Kick {name} from the server?')
+            + self.button(action, {'do': 'spawn'}, 'Teleport to spawn', session, '', f'Teleport {name} to the world spawn?')
+            + self.button(action, {'do': 'heal'}, 'Heal & feed', session, 'primary')
+            + '</div><p class="muted">Kick, teleport, heal and game mode need the player online. Every action is logged on the Pi.</p>')
+        policy_card = self.card('Server policies', policy, icon=self.texture('command_block_front', '', 'icon'))
+        return (header + '<div class="grid two">' + vitals_card + location_card + '</div>' + inventory_card + stats_card
+                + '<div class="grid two">' + advancements_card + policy_card + '</div>'
+                + '<p><a class="mc-btn" href="/players" data-nav>Back to players</a></p>')
 
     def players(self, status, session):
         enabled = status['properties']['white-list'] == 'true'
@@ -336,7 +510,7 @@ class Views:
             f'<form class="terminal-input" method="post" action="/console" autocomplete="off">{self.csrf(session)}'
             '<label for="cmd" class="prompt">&gt;</label>'
             '<input id="cmd" name="command" type="text" maxlength="256" spellcheck="false" autocapitalize="off" '
-            'placeholder="Type a command (no slash needed) · ↑↓ history · Tab completes" required>'
+            'placeholder="Type a command · ↑↓ history · Tab" required>'
             '<button class="mc-btn small">Run</button></form>'
             f'<div class="chips">{chips}</div>'
             '<p class="terminal-hint">Commands run as the server operator. stop, restart and reload are blocked: '

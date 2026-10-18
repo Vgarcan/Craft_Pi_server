@@ -8,11 +8,14 @@ import importlib.util
 import os
 from pathlib import Path
 import pwd
+import re
 import sys
 import tarfile
 
 PNG = b'\x89PNG\r\n\x1a\n'
 LIMIT = 256 * 1024
+ICON = re.compile(r'(item|block)_[a-z0-9_]{1,64}\.png')
+MAX_FILES, MAX_TOTAL = 6000, 40 * 1024 * 1024
 
 
 def allowed_names():
@@ -25,10 +28,14 @@ def allowed_names():
 def install(stream, destination, uid=None, gid=None):
     allowed = allowed_names()
     destination.mkdir(mode=0o755, exist_ok=True)
-    installed = []
+    installed, total = [], 0
     with tarfile.open(fileobj=stream, mode='r|') as archive:
         for member in archive:
-            if member.name not in allowed or not member.isfile() or not 0 < member.size <= LIMIT:
+            total += max(member.size, 0)
+            if len(installed) >= MAX_FILES or total > MAX_TOTAL:
+                raise ValueError('El tar de texturas es desproporcionado')
+            if (member.name not in allowed and not ICON.fullmatch(member.name)) or not member.isfile() \
+                    or not 0 < member.size <= LIMIT:
                 raise ValueError(f'Entrada no admitida en el tar de texturas: {member.name!r}')
             payload = archive.extractfile(member).read(LIMIT + 1)
             if not payload.startswith(PNG) or len(payload) != member.size:

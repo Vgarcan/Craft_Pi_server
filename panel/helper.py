@@ -26,6 +26,9 @@ from mclan import cli, host  # noqa: E402
 from mclan.common import Error, LOG, run  # noqa: E402
 from mclan.runtime import Runtime  # noqa: E402
 
+sys.path.insert(0, str(ROOT / 'panel'))
+import nbt  # noqa: E402
+
 CONTAINER = 'minecraft-lan-minecraft-1'
 JAVA_NAME = re.compile(r'[A-Za-z0-9_]{3,16}')
 # Los gamertags pueden llevar espacios; Floodgate los sustituye por "_". Se exige la forma sin
@@ -280,6 +283,67 @@ def world_spawn(data_dir):
         return None
 
 
+UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+GAMEMODES = ('survival', 'creative', 'adventure', 'spectator')
+PLAYER_ACTIONS = ('op', 'deop', 'kick', 'ban', 'pardon', 'gamemode', 'spawn', 'heal')
+# Estadísticas destacadas del apartado minecraft:custom.
+HEADLINE_STATS = ('play_time', 'deaths', 'mob_kills', 'player_kills', 'walk_one_cm', 'sprint_one_cm', 'swim_one_cm',
+                  'fly_one_cm', 'boat_one_cm', 'jump', 'damage_dealt', 'damage_taken', 'time_since_death', 'leave_game',
+                  'open_chest', 'traded_with_villager', 'animals_bred', 'fish_caught', 'sleep_in_bed')
+
+
+def is_bedrock(uuid_text):
+    return uuid_text.startswith('00000000-0000-0000-')
+
+
+def top(mapping, limit=8):
+    return [{'id': key.split(':', 1)[-1], 'count': value}
+            for key, value in sorted(mapping.items(), key=lambda item: -item[1])[:limit] if isinstance(value, int)]
+
+
+def items(entries):
+    result = []
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, dict) and isinstance(entry.get('id'), str):
+            result.append({'slot': entry.get('Slot'), 'id': entry['id'].split(':', 1)[-1],
+                           'count': entry.get('count', entry.get('Count', 1))})
+    return result
+
+
+def profile_from(data, stats, advancements):
+    """Perfil a partir del .dat, las estadísticas y los logros (todo ya leído y acotado)."""
+    bukkit, paper = data.get('bukkit', {}), data.get('Paper', {})
+    equipment = data.get('equipment', {}) if isinstance(data.get('equipment'), dict) else {}
+    custom = stats.get('minecraft:custom', {})
+    done = sorted(key.split(':', 1)[-1] for key, value in advancements.items()
+                  if isinstance(value, dict) and value.get('done') and '/recipes/' not in key and 'recipes/' not in key)
+    death = data.get('LastDeathLocation') or data.get('last_death_location')
+    respawn = data.get('respawn') if isinstance(data.get('respawn'), dict) else None
+    return {
+        'name': bukkit.get('lastKnownName'),
+        'first_played': bukkit.get('firstPlayed'), 'last_played': paper.get('LastSeen') or bukkit.get('lastPlayed'),
+        'last_login': paper.get('LastLogin'),
+        'vitals': {'health': data.get('Health'), 'food': data.get('foodLevel'), 'saturation': data.get('foodSaturationLevel'),
+                   'xp_level': data.get('XpLevel'), 'xp_progress': data.get('XpP'), 'xp_total': data.get('XpTotal'),
+                   'air': data.get('Air'), 'gamemode': GAMEMODES[data['playerGameType']] if data.get('playerGameType') in range(4) else None,
+                   'abilities': {k: bool(v) for k, v in data.get('abilities', {}).items() if k in ('flying', 'mayfly', 'invulnerable', 'mayBuild')}},
+        'location': {'dimension': str(data.get('Dimension', '')).split(':', 1)[-1], 'pos': data.get('Pos'),
+                     'death': {'dimension': str(death.get('dimension', '')).split(':', 1)[-1], 'pos': death.get('pos')}
+                     if isinstance(death, dict) else None,
+                     'respawn': {'dimension': str(respawn.get('dimension', '')).split(':', 1)[-1], 'pos': respawn.get('pos')}
+                     if respawn else None},
+        'inventory': items(data.get('Inventory')), 'ender_chest': items(data.get('EnderItems')),
+        'equipment': {slot: items([dict(value, Slot=slot)])[0] for slot, value in equipment.items()
+                      if isinstance(value, dict) and items([value])},
+        'selected_slot': data.get('SelectedItemSlot'),
+        'stats': {'custom': {key: custom[f'minecraft:{key}'] for key in HEADLINE_STATS if f'minecraft:{key}' in custom},
+                  'mined': top(stats.get('minecraft:mined', {})), 'crafted': top(stats.get('minecraft:crafted', {})),
+                  'killed': top(stats.get('minecraft:killed', {})), 'killed_by': top(stats.get('minecraft:killed_by', {})),
+                  'used': top(stats.get('minecraft:used', {})), 'picked_up': top(stats.get('minecraft:picked_up', {}))},
+        'advancements': done,
+    }
+
+
 def bluemap_render(console):
     """Estado del render a partir de la salida de /bluemap."""
     text = console.lower()
@@ -349,6 +413,110 @@ class Panel:
         if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
             raise Error('whitelist.json no tiene el formato esperado.')
         return [{'name': str(e.get('name', '')), 'uuid': str(e.get('uuid', ''))} for e in entries]
+
+    def json_data(self, relative, limit=1024**2, default=None):
+        try:
+            return json.loads(read_data(self.runtime.data, relative, limit))
+        except FileNotFoundError:
+            return default
+        except (OSError, ValueError):
+            return default
+
+    def online_names(self):
+        try:
+            listed = self.rcon('list')
+        except Error:
+            return None
+        match = re.search(r'players online:?\s*(.*)$', listed)
+        return {n.strip() for n in (match[1] if match else '').split(',') if n.strip()}
+
+    def known_players(self):
+        """Todos los jugadores conocidos: whitelist, caché de usuarios, ops, bans y datos del mundo."""
+        names = {}
+        for source in ('usercache.json', 'whitelist.json', 'ops.json', 'banned-players.json'):
+            for entry in self.json_data(source, default=[]) or []:
+                if isinstance(entry, dict) and UUID.fullmatch(str(entry.get('uuid', ''))) and entry.get('name'):
+                    names.setdefault(entry['uuid'], str(entry['name']))
+        try:
+            folder = open_folder(self.runtime.data, 'world/players/data')
+            try:
+                files = [entry.name[:-4] for entry in os.scandir(folder)
+                         if entry.name.endswith('.dat') and entry.is_file(follow_symlinks=False)]
+            finally:
+                os.close(folder)
+        except OSError:
+            files = []
+        for uuid_text in files:
+            if UUID.fullmatch(uuid_text) and uuid_text != '00000000-0000-0000-0000-000000000000':
+                names.setdefault(uuid_text, None)
+        return names
+
+    def players(self):
+        names = self.known_players()
+        online = self.online_names() or set()
+        ops = {e.get('uuid') for e in self.json_data('ops.json', default=[]) or [] if isinstance(e, dict)}
+        banned = {e.get('uuid') for e in self.json_data('banned-players.json', default=[]) or [] if isinstance(e, dict)}
+        listed = {e['uuid'] for e in self.whitelist()}
+        result = []
+        for uuid_text, name in names.items():
+            try:
+                data = nbt.loads(read_data(self.runtime.data, f'world/players/data/{uuid_text}.dat', 4 * 1024**2))
+            except (OSError, ValueError):
+                data = {}
+            name = name or data.get('bukkit', {}).get('lastKnownName') or uuid_text
+            result.append({'uuid': uuid_text, 'name': name, 'edition': 'bedrock' if is_bedrock(uuid_text) else 'java',
+                           'online': name in online, 'op': uuid_text in ops, 'banned': uuid_text in banned,
+                           'whitelisted': uuid_text in listed,
+                           'last_played': data.get('Paper', {}).get('LastSeen') or data.get('bukkit', {}).get('lastPlayed')})
+        return {'players': sorted(result, key=lambda p: (not p['online'], -(p['last_played'] or 0)))}
+
+    def player(self, uuid_text):
+        summary = next((p for p in self.players()['players'] if p['uuid'] == uuid_text), None)
+        if summary is None:
+            return {'ok': False, 'output': 'Unknown player.'}
+        try:
+            data = nbt.loads(read_data(self.runtime.data, f'world/players/data/{uuid_text}.dat', 4 * 1024**2))
+        except FileNotFoundError:
+            data = {}
+        except (OSError, ValueError) as exc:
+            return {'ok': False, 'output': f'Player data could not be read safely: {exc}'}
+        stats = (self.json_data(f'world/players/stats/{uuid_text}.json', default={}) or {}).get('stats', {})
+        advancements = self.json_data(f'world/players/advancements/{uuid_text}.json', default={}) or {}
+        profile = profile_from(data, stats if isinstance(stats, dict) else {}, advancements if isinstance(advancements, dict) else {})
+        bans = [e for e in self.json_data('banned-players.json', default=[]) or [] if isinstance(e, dict) and e.get('uuid') == uuid_text]
+        ops = [e for e in self.json_data('ops.json', default=[]) or [] if isinstance(e, dict) and e.get('uuid') == uuid_text]
+        if summary['online']:
+            # Posición y vida en vivo: el .dat sólo se guarda en el autosave.
+            for key, path in (('pos', 'Pos'), ('health', 'Health'), ('food', 'foodLevel')):
+                try:
+                    reply = self.rcon('data', 'get', 'entity', summary['name'], path)
+                except Error:
+                    continue
+                numbers = [float(n) for n in re.findall(r'-?\d+(?:\.\d+)?(?=[dfs]?\b)', reply.split('data:', 1)[-1])]
+                if key == 'pos' and len(numbers) >= 3:
+                    profile['location']['pos'] = numbers[:3]
+                elif key != 'pos' and numbers:
+                    profile['vitals'][key] = numbers[0]
+        return {'ok': True, **summary, **profile, 'name': summary['name'],
+                'xuid': int(uuid_text.replace('-', ''), 16) if is_bedrock(uuid_text) else None,
+                'ban': {k: bans[0].get(k) for k in ('reason', 'created', 'source', 'expires')} if bans else None,
+                'op_level': ops[0].get('level') if ops else None}
+
+    def player_action(self, action, name, mode=None):
+        if name not in {p['name'] for p in self.players()['players']}:
+            return {'ok': False, 'output': 'Unknown player.'}
+        commands = {
+            'op': [('op', name)], 'deop': [('deop', name)], 'pardon': [('pardon', name)],
+            'kick': [('kick', name, 'Kicked from the server panel')],
+            'ban': [('ban', name, 'Banned from the server panel')],
+            'gamemode': [('gamemode', mode, name)],
+            'spawn': [('execute', 'in', 'minecraft:overworld', 'run', 'tp', name,
+                       *[str(v) for v in (world_spawn(self.runtime.data) or [0, 100, 0])])],
+            'heal': [('effect', 'give', name, 'minecraft:instant_health', '1', '10'),
+                     ('effect', 'give', name, 'minecraft:saturation', '1', '10')],
+        }[action]
+        LOG.info('Acción de jugador desde el panel: %s %s %s', action, name, mode or '')
+        return {'ok': True, 'output': ' '.join(self.rcon(*words) for words in commands)}
 
     def status(self):
         active = self.runtime.active()
@@ -557,6 +725,23 @@ def parse(argv):
         return verb, [validate_changes(args)], True
     if verb == 'console':
         return verb, [console_command(args)], True
+    if verb == 'players':
+        expect(0)
+        return verb, [], False
+    if verb == 'player':
+        expect(1)
+        if not UUID.fullmatch(args[0]):
+            raise ValueError('invalid UUID')
+        return verb, args, False
+    if verb == 'player-action':
+        if len(args) not in (2, 3):
+            raise ValueError('player-action needs an action, a name and optionally a game mode')
+        action, name = choice(*PLAYER_ACTIONS)(args[0]), args[1]
+        if not (JAVA_NAME.fullmatch(name) or BEDROCK_NAME.fullmatch(name)):
+            raise ValueError('invalid name')
+        if (action == 'gamemode') != (len(args) == 3):
+            raise ValueError('only gamemode takes a game mode')
+        return verb, [action, name, *([choice(*GAMEMODES)(args[2])] if len(args) == 3 else [])], True
     if verb == 'bluemap-render':
         expect(1)
         return verb, [choice('on', 'off')(args[0])], True
@@ -577,6 +762,12 @@ def execute(panel, verb, args):
         return {'ok': True, **panel.pulse()}
     if verb == 'console':
         return panel.console(*args)
+    if verb == 'players':
+        return {'ok': True, **panel.players()}
+    if verb == 'player':
+        return panel.player(*args)
+    if verb == 'player-action':
+        return panel.player_action(*args)
     if verb in ('start', 'stop', 'restart', 'backup'):
         return panel.manage(verb)
     if verb == 'whitelist-add':

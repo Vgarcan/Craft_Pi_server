@@ -25,6 +25,27 @@ def load(name):
 
 helper = load('helper')
 server = load('server')
+nbt = load('nbt')
+
+
+def nbt_bytes(value, name=''):
+    """Serializador NBT mínimo para pruebas (compuestos, listas, enteros, dobles y textos)."""
+    import struct
+    def tag(v):
+        if isinstance(v, dict): return 10
+        if isinstance(v, list): return 9
+        if isinstance(v, float): return 6
+        if isinstance(v, int): return 3
+        return 8
+    def payload(v):
+        if isinstance(v, dict):
+            return b''.join(bytes([tag(x)]) + struct.pack('>H', len(k)) + k.encode() + payload(x) for k, x in v.items()) + b'\x00'
+        if isinstance(v, list):
+            return bytes([tag(v[0]) if v else 1]) + struct.pack('>i', len(v)) + b''.join(payload(x) for x in v)
+        if isinstance(v, float): return struct.pack('>d', v)
+        if isinstance(v, int): return struct.pack('>i', v)
+        raw = str(v).encode(); return struct.pack('>H', len(raw)) + raw
+    return b'\x0a' + struct.pack('>H', len(name)) + name.encode() + payload(value)
 
 
 def status(**changes):
@@ -157,6 +178,68 @@ class HelperValidationTests(unittest.TestCase):
                 with self.subTest(bad=bad[0][0]), self.assertRaises(ValueError):
                     installer.install(archive(bad), target)
             self.assertEqual((target / 'logo.png').read_bytes(), png)
+
+    def test_nbt_reader_roundtrip_and_limits(self):
+        import gzip
+        import struct
+        data = {'Health': 15.5, 'foodLevel': 13, 'Dimension': 'minecraft:overworld', 'Pos': [1.0, 64.0, -2.0],
+                'Inventory': [{'Slot': 0, 'id': 'minecraft:diamond_pickaxe', 'count': 1}], 'bukkit': {'lastKnownName': 'Steve'}}
+        self.assertEqual(nbt.loads(gzip.compress(nbt_bytes(data))), data)
+        with self.assertRaises(ValueError):
+            nbt.loads(nbt_bytes(data)[:-5])
+        deep = {}
+        cursor = deep
+        for _ in range(nbt.MAX_DEPTH + 2):
+            cursor['x'] = {}
+            cursor = cursor['x']
+        with self.assertRaises(ValueError):
+            nbt.loads(nbt_bytes(deep))
+        huge = b'\x0a\x00\x00\x09\x00\x01L\x03' + struct.pack('>i', 10**9) + b'\x00'
+        with self.assertRaises(ValueError):
+            nbt.loads(huge)
+        with self.assertRaises(ValueError):
+            nbt.loads(b'\x08\x00\x00')
+
+    def test_profile_summary_from_player_files(self):
+        data = {'Health': 15.0, 'foodLevel': 13, 'XpLevel': 12, 'playerGameType': 1, 'Dimension': 'minecraft:the_nether',
+                'Pos': [1.5, 70.0, -3.2], 'Inventory': [{'Slot': 0, 'id': 'minecraft:torch', 'count': 64}, {'id': 7}],
+                'bukkit': {'lastKnownName': 'Steve', 'firstPlayed': 1}, 'Paper': {'LastSeen': 5},
+                'abilities': {'flying': 1, 'mayfly': 1, 'walkSpeed': 0.1}}
+        stats = {'minecraft:custom': {'minecraft:play_time': 72000, 'minecraft:deaths': 2},
+                 'minecraft:mined': {'minecraft:stone': 10, 'minecraft:dirt': 50}}
+        advancements = {'minecraft:story/root': {'done': True}, 'minecraft:recipes/misc/x': {'done': True},
+                        'minecraft:story/mine_stone': {'done': False}}
+        profile = helper.profile_from(data, stats, advancements)
+        self.assertEqual(profile['vitals']['gamemode'], 'creative')
+        self.assertEqual(profile['location']['dimension'], 'the_nether')
+        self.assertEqual(profile['inventory'], [{'slot': 0, 'id': 'torch', 'count': 64}])
+        self.assertEqual(profile['stats']['mined'][0], {'id': 'dirt', 'count': 50})
+        self.assertEqual(profile['stats']['custom'], {'play_time': 72000, 'deaths': 2})
+        self.assertEqual(profile['advancements'], ['story/root'])
+        self.assertEqual(profile['vitals']['abilities'], {'flying': True, 'mayfly': True})
+        self.assertEqual(profile['last_played'], 5)
+
+    def test_player_verbs_are_validated(self):
+        self.assertEqual(helper.parse(['player-action', 'gamemode', '.Alguien', 'creative'])[1], ['gamemode', '.Alguien', 'creative'])
+        self.assertEqual(helper.parse(['player-action', 'kick', 'Steve'])[1], ['kick', 'Steve'])
+        for argv in (['player-action', 'gamemode', 'Steve'], ['player-action', 'kick', 'Steve', 'creative'],
+                     ['player-action', 'rm', 'Steve'], ['player-action', 'op', 'Steve;stop'], ['player-action', 'op', '@a'],
+                     ['player-action', 'gamemode', 'Steve', 'god'], ['player', '../../etc'], ['player', 'ABC'],
+                     ['players', 'x']):
+            with self.subTest(argv=argv), self.assertRaises(ValueError):
+                helper.parse(argv)
+
+    def test_player_actions_only_for_known_players(self):
+        panel = helper.Panel.__new__(helper.Panel)
+        panel.players = Mock(return_value={'players': [{'name': 'Steve'}]})
+        panel.rcon = Mock(return_value='ok')
+        panel.runtime = Mock(data=Path('/nonexistent'))
+        self.assertFalse(panel.player_action('op', 'Mallory')['ok'])
+        panel.rcon.assert_not_called()
+        panel.player_action('gamemode', 'Steve', 'creative')
+        self.assertEqual(panel.rcon.call_args.args, ('gamemode', 'creative', 'Steve'))
+        panel.player_action('ban', 'Steve')
+        self.assertEqual(panel.rcon.call_args.args[:2], ('ban', 'Steve'))
 
     def test_floodgate_uuid_from_xuid(self):
         self.assertEqual(helper.floodgate_uuid('2535412345678901'), '00000000-0000-0000-0009-01f1b0392c35')
@@ -435,6 +518,7 @@ class PanelAppTests(unittest.TestCase):
                 self.assertNotIn(b'<script>x', body)
                 self.assertNotIn(b' style=', body)  # la CSP prohíbe estilos en línea
                 self.assertEqual(body.count(b'<script'), 1)  # sólo /static/app.js
+                self.assertRegex(body.decode(), r'/static/app\.css\?v=[0-9a-f]{12}"')
         health = self.request('GET', '/health', cookie=cookie)[2]
         self.assertIn(b'<span class="badge">FAIL</span>', health)
 
@@ -584,6 +668,36 @@ class PanelAppTests(unittest.TestCase):
             self.assertTrue(self.app.config_path.exists())
         self.assertEqual(self.request('GET', '/', cookie=first)[0], 303)
         self.assertEqual(self.request('GET', '/', cookie=cookie)[0], 200)
+
+    def test_profile_page_and_actions(self):
+        cookie, csrf = self.login()
+        uuid = '00000000-0000-0000-0009-01f1b0392c35'
+        listing = {'ok': True, 'players': [{'uuid': uuid, 'name': '.Alguien', 'edition': 'bedrock', 'online': True, 'op': False,
+                                            'banned': False, 'whitelisted': True, 'last_played': None}]}
+        profile = dict(listing['players'][0], ok=True, xuid=123, ban=None, op_level=None, first_played=None,
+                       vitals={'health': 10.0, 'food': 8, 'gamemode': 'survival', 'abilities': {}},
+                       location={'dimension': 'overworld', 'pos': [1.0, 64.0, 2.0], 'death': None, 'respawn': None},
+                       inventory=[{'slot': 0, 'id': '<script>', 'count': 3}], ender_chest=[], equipment={},
+                       stats={'custom': {'play_time': 2400}, 'mined': [{'id': 'stone', 'count': 5}]}, advancements=['story/root'])
+        def fake(argv, timeout=60):
+            self.calls.append(argv)
+            return {'players': listing, 'player': profile, 'status': status()}.get(argv[0], {'ok': True, 'output': 'done'})
+        self.app.helper = fake
+        body = self.request('GET', '/players', cookie=cookie)[2]
+        self.assertIn(f'href="/players/{uuid}"'.encode(), body)
+        code, _, page = self.request('GET', f'/players/{uuid}', cookie=cookie)
+        self.assertEqual(code, 200)
+        for marker in (b'Vitals', b'Inventory', b'Statistics', b'Server policies', b'Make operator', b'2 min', b'Story'):
+            self.assertIn(marker, page)
+        self.assertNotIn(b'<script>', page)
+        self.request('POST', f'/players/{uuid}', f'csrf={csrf}&do=gamemode&mode=creative', cookie)
+        self.assertEqual(self.calls[-1], ['player-action', 'gamemode', '.Alguien', 'creative'])
+        self.request('POST', f'/players/{uuid}', f'csrf={csrf}&do=op', cookie)
+        self.assertEqual(self.calls[-1], ['player-action', 'op', '.Alguien'])
+        other = '11111111-1111-1111-1111-111111111111'
+        self.assertEqual(self.request('POST', f'/players/{other}', f'csrf={csrf}&do=op', cookie)[0], 400)
+        self.assertEqual(self.request('POST', f'/players/{uuid}', f'csrf={csrf}&do=rm', cookie)[0], 400)
+        self.assertEqual(self.request('POST', f'/players/{uuid}', 'do=op', cookie)[0], 403)
 
     def test_logout_ends_session(self):
         cookie, csrf = self.login()

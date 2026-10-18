@@ -104,7 +104,10 @@ class App:
             assets = {p.name for p in self.assets_dir.glob('*.png')}
         except OSError:
             assets = set()  # sin texturas: el CSS usa sus equivalentes
-        self.views = Views(assets)
+        digest = hashlib.sha256()
+        for name in ('app.css', 'app.js'):
+            digest.update((STATIC / name).read_bytes())
+        self.views = Views(assets, digest.hexdigest()[:12])
 
     # --- Infraestructura -----------------------------------------------------------------
     def helper(self, argv, timeout=60):
@@ -212,6 +215,8 @@ class App:
             return 303, {'Location': self.map_link()}, b''
         if method == 'GET' and (match := re.fullmatch(r'/(?:job|tarea)/([0-9a-f]{12})', path)):
             return self.job_page(session, match[1])
+        if match := re.fullmatch(r'/players/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', path):
+            return (self.profile_page if method == 'GET' else self.profile_post)(session, form, match[1])
         routes = {
             ('GET', '/'): self.dashboard, ('POST', '/action'): self.action,
             ('GET', '/players'): self.players_page, ('POST', '/players'): self.players_post,
@@ -334,7 +339,31 @@ class App:
         status, error = self.status_or_error(session, 'Players', '/players', 'players')
         if error:
             return error
-        return self.render('Players', self.views.players(status, session), session, '/players', slug='players')
+        known = self.helper(['players'])
+        body = (self.views.known(known.get('players', [])) if known.get('ok') else '') + self.views.players(status, session)
+        return self.render('Players', body, session, '/players', slug='players')
+
+    def profile_page(self, session, form, uuid):
+        profile = self.helper(['player', uuid])
+        if not profile.get('ok'):
+            return self.render('Player', f'<div class="alert bad">{html.escape(str(profile.get("output", "")))}</div>',
+                               session, '/players', slug='profile', status=404)
+        status = self.helper(['status'])
+        map_base = self.config['map_url'] if (status.get('bluemap') or {}).get('enabled') else ''
+        return self.render(profile['name'], self.views.profile(profile, session, map_base, status.get('spawn')),
+                           session, '/players', slug='profile')
+
+    def profile_post(self, session, form, uuid):
+        action = form.get('do')
+        known = {p['uuid']: p['name'] for p in self.helper(['players']).get('players', [])}
+        if uuid not in known or action not in ('op', 'deop', 'kick', 'ban', 'pardon', 'gamemode', 'spawn', 'heal'):
+            return 400, {}, b''
+        argv = ['player-action', action, known[uuid]] + ([form.get('mode', '')] if action == 'gamemode' else [])
+        labels = {'op': 'Operator rights granted.', 'deop': 'Operator rights removed.', 'kick': 'Player kicked.',
+                  'ban': 'Player banned.', 'pardon': 'Player unbanned.', 'gamemode': 'Game mode changed.',
+                  'spawn': 'Teleported to spawn.', 'heal': 'Healed and fed.'}
+        self.result_flash(session, self.helper(argv, timeout=30), labels[action])
+        return 303, {'Location': f'/players/{uuid}'}, b''
 
     def players_post(self, session, form, query):
         action = form.get('do')

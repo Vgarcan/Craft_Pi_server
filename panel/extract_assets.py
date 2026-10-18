@@ -6,6 +6,7 @@ Mojang. Las texturas son de Mojang: se usan sólo en la LAN y nunca se incluyen 
 """
 import glob
 import io
+import re
 import sys
 import tarfile
 import zipfile
@@ -20,6 +21,8 @@ ASSETS = {
     'xp_background.png': 'gui/sprites/hud/experience_bar_background.png',
     'xp_progress.png': 'gui/sprites/hud/experience_bar_progress.png',
     'heart.png': 'gui/sprites/hud/heart/full.png',
+    'food.png': 'gui/sprites/hud/food_full.png',
+    'armor.png': 'gui/sprites/hud/armor_full.png',
     'button.png': 'gui/sprites/widget/button.png',
     'button_highlighted.png': 'gui/sprites/widget/button_highlighted.png',
     'button_disabled.png': 'gui/sprites/widget/button_disabled.png',
@@ -32,6 +35,9 @@ ASSETS = {
         'ender_eye', 'spyglass', 'golden_apple', 'redstone', 'diamond', 'emerald', 'barrier', 'iron_door',
         'totem_of_undying', 'experience_bottle', 'written_book', 'ender_pearl', 'nether_star', 'bundle')},
 }
+# Iconos para inventarios y estadísticas: toda textura plana de objeto o bloque, publicada como
+# item_<id>.png o block_<id>.png (los mobs se representan con su huevo de generación).
+ICON = re.compile(r'assets/minecraft/textures/(item|block)/([a-z0-9_]{1,64})\.png')
 
 
 def main():
@@ -41,12 +47,15 @@ def main():
     output = io.BytesIO()
     with zipfile.ZipFile(jars[-1]) as jar, tarfile.open(fileobj=output, mode='w') as archive:
         names = set(jar.namelist())
-        for published, source in ASSETS.items():
-            if BASE + source in names:
-                payload = jar.read(BASE + source)
-                info = tarfile.TarInfo(published)
-                info.size, info.mode = len(payload), 0o644
-                archive.addfile(info, io.BytesIO(payload))
+        wanted = {published: BASE + source for published, source in ASSETS.items() if BASE + source in names}
+        for name in sorted(names):
+            if match := ICON.fullmatch(name):
+                wanted[f'{match[1]}_{match[2]}.png'] = name
+        for published, source in wanted.items():
+            payload = jar.read(source)
+            info = tarfile.TarInfo(published)
+            info.size, info.mode = len(payload), 0o644
+            archive.addfile(info, io.BytesIO(payload))
     sys.stdout.buffer.write(output.getvalue())
 
 
