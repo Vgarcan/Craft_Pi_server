@@ -1,0 +1,13 @@
+.env
+compose.yaml
+data/
+releases/
+backups/
+state/
+logs/
+config/settings.json
+__pycache__/
+*.pyc
+.venv/
+.ruff_cache/
+.pytest_cache/

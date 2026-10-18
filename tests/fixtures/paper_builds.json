@@ -1,0 +1,46 @@
+[
+  {
+    "id": 205,
+    "time": "2026-10-17T20:50:27Z",
+    "channel": "STABLE",
+    "commits": [
+      {
+        "sha": "a90108f43cabdf058548f9b27b9319bf7842c49d",
+        "time": "2026-10-17T20:50:13Z",
+        "message": "Prevent negative max stack sizes in inventories (#14407)"
+      }
+    ],
+    "downloads": {
+      "server:default": {
+        "name": "paper-26.3-205.jar",
+        "checksums": {
+          "sha256": "a0a58f532f08054ea92eb916d3edb6ed3c86429d77175317304f6e995cce9968"
+        },
+        "size": 55242379,
+        "url": "https://fill-data.papermc.io/v1/objects/a0a58f532f08054ea92eb916d3edb6ed3c86429d77175317304f6e995cce9968/paper-26.3-205.jar"
+      }
+    }
+  },
+  {
+    "id": 204,
+    "time": "2026-10-17T20:18:49Z",
+    "channel": "STABLE",
+    "commits": [
+      {
+        "sha": "dd585fda4d49fb09ec824b1467dbdea1ef242c56",
+        "time": "2026-10-17T20:18:35Z",
+        "message": "Sync latest Moonrise changes (#14408)"
+      }
+    ],
+    "downloads": {
+      "server:default": {
+        "name": "paper-26.3-204.jar",
+        "checksums": {
+          "sha256": "b53ee183faa98b521b390d54de2b7fcdf2f265b860fc38cae8f2edae3d11cdd4"
+        },
+        "size": 55241690,
+        "url": "https://fill-data.papermc.io/v1/objects/b53ee183faa98b521b390d54de2b7fcdf2f265b860fc38cae8f2edae3d11cdd4/paper-26.3-204.jar"
+      }
+    }
+  }
+]

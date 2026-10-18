@@ -1,0 +1,46 @@
+{
+  "project_id": "geyser",
+  "project_name": "Geyser",
+  "version": "2.12.0",
+  "build": 1265,
+  "time": "2026-10-18T11:02:15.849Z",
+  "channel": "default",
+  "promoted": false,
+  "changes": [
+    {
+      "commit": "02dbfaccb8be68c47c176c96c24bdbddb472b375",
+      "summary": "Register a BlockState for every state of a non-vanilla block (#6789)",
+      "message": "Register a BlockState for every state of a non-vanilla block (#6789)"
+    }
+  ],
+  "downloads": {
+    "bungeecord": {
+      "name": "Geyser-BungeeCord.jar",
+      "sha256": "a9d4812db00b45fb4ccbdb553ac7de13f0acf97804cf3cdc506cdeba27265ec6"
+    },
+    "fabric": {
+      "name": "Geyser-Fabric.jar",
+      "sha256": "594aa649e60132050137534d22fa42eec79219e97c46463c93a64ebd1d04791b"
+    },
+    "neoforge": {
+      "name": "Geyser-NeoForge.jar",
+      "sha256": "c8e950369a951100ee5d5ae9dc3aa738483282e3ebacf4cc8cdf9076ac118d4c"
+    },
+    "spigot": {
+      "name": "Geyser-Spigot.jar",
+      "sha256": "7b4054c4792f76b34ce88c43871555c5e9774898ff8d1c269e4f0b39c758eba2"
+    },
+    "standalone": {
+      "name": "Geyser-Standalone.jar",
+      "sha256": "3e235b5112110665a53ed3b42c0b8d514021c50184c01380aa5b01d52ee1f636"
+    },
+    "velocity": {
+      "name": "Geyser-Velocity.jar",
+      "sha256": "32f04b02378c5c71ca496a88b45b6c607774f99f8b0b9febeb0914c7e6b73ab7"
+    },
+    "viaproxy": {
+      "name": "Geyser-ViaProxy.jar",
+      "sha256": "59047f77a66b28f6e5e2ecdd0e45e527a3fa96c8f5c5f3c33d507db2e8e8475e"
+    }
+  }
+}

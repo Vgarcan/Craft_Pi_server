@@ -1,0 +1,45 @@
+# Plantilla versionada. install.sh crea compose.yaml sin sobreescribirlo.
+name: minecraft-lan
+services:
+  minecraft:
+    image: ${RUNTIME_IMAGE:?Falta RUNTIME_IMAGE}
+    platform: linux/arm64
+    pull_policy: never
+    user: "10000:10000"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 180s
+    mem_limit: 3g
+    memswap_limit: 3g
+    environment:
+      JAVA_XMS: 512M
+      JAVA_XMX: 2048M
+    ports:
+      - "${LAN_IP:?Falta LAN_IP}:25565:25565/tcp"
+      - "${LAN_IP:?Falta LAN_IP}:19132:19132/udp"
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./releases/${RELEASE_ID:?Falta RELEASE_ID}
+        target: /opt/release
+        read_only: true
+        bind:
+          create_host_path: false
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 512
+    healthcheck:
+      test: [CMD, python3, /opt/mclan/probe.py, health]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 240s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
