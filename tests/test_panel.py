@@ -25,7 +25,7 @@ def load(name):
 
 helper = load('helper')
 server = load('server')
-nbt = load('nbt')
+from mclan import nbt  # noqa: E402
 
 
 def nbt_bytes(value, name=''):

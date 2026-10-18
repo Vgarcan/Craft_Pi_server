@@ -248,10 +248,19 @@ def restore(runtime, path, client, timeout, *, ip_override=None):
             print(f'Copia de seguridad del estado anterior: {safety}')
         write_json(runtime.state / 'operation.json', {"operation": "restore", "backup": str(path),
                                                        "previous_data": str(previous)})
-        if runtime.data.exists():
-            runtime.data.rename(previous)
-        (staging / 'data').rename(runtime.data)
+        # Biblioteca de mundos: si el backup es de otro mundo, el activo se guarda en su ranura antes
+        # de sustituir data/ (no se pierde aunque data/ anterior se borre después).
+        from .worlds import Library
+        commit_world, undo_world = Library(runtime).restore_handoff(staging / 'data')
+        try:
+            if runtime.data.exists():
+                runtime.data.rename(previous)
+            (staging / 'data').rename(runtime.data)
+        except BaseException:
+            undo_world()
+            raise
         swapped = True
+        commit_world()
         for p in [runtime.data, *runtime.data.rglob('*')]:
             os.chown(p, 10000, 10000)
             p.chmod(0o700 if p.is_dir() else 0o600)

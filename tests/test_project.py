@@ -835,6 +835,34 @@ class BackupTests(unittest.TestCase):
         self.runtime.start.assert_called_once_with(10, pending=True)
         self.assertEqual(self.runtime.stop.call_count, 2)
 
+    def test_restore_of_another_worlds_backup_preserves_the_active_world(self):
+        from mclan.worlds import MARKER, Library
+        library = Library(self.runtime)
+        (self.runtime.data / 'world').mkdir()
+        (self.runtime.data / 'world/level.dat').write_bytes(b'other at backup time')
+        (self.runtime.data / MARKER).write_text('other\n')
+        index = library.load()
+        index['worlds']['other'] = {'name': 'Other', 'created': 'x', 'settings': {}}
+        index['active'] = 'other'
+        library.save(index)
+        path = backups.snapshot(self.runtime)
+        # Después se cambió a main: other quedó en la biblioteca (ya modificado) y main en data/.
+        (self.root / 'worlds/other').mkdir(parents=True)
+        (self.runtime.data / 'world').rename(self.root / 'worlds/other/world')
+        (self.root / 'worlds/other/world/level.dat').write_bytes(b'other later')
+        (self.runtime.data / 'world').mkdir()
+        (self.runtime.data / 'world/level.dat').write_bytes(b'main world')
+        (self.runtime.data / MARKER).write_text('main\n')
+        index['active'] = 'main'
+        library.save(index)
+        with patch('mclan.backups.os.chown'):
+            backups.restore(self.runtime, path, Mock(), 10)
+        self.assertEqual((self.runtime.data / 'world/level.dat').read_bytes(), b'other at backup time')
+        self.assertEqual((self.root / 'worlds/main/world/level.dat').read_bytes(), b'main world')
+        aside = list(self.runtime.state.glob('pre-restore-world-other-*'))
+        self.assertEqual((aside[0] / 'level.dat').read_bytes(), b'other later')
+        self.assertEqual(library.load()['active'], 'other')
+
     def test_restore_can_rebind_for_new_host(self):
         path = backups.snapshot(self.runtime)
         with patch('mclan.backups.os.chown'), patch('mclan.host.lan_ip', return_value='192.168.1.60'):

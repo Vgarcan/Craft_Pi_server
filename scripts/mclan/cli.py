@@ -55,6 +55,28 @@ def parser():
     plugin.add_argument('name', choices=['bluemap'])
     plugin.add_argument('state', choices=['on', 'off'])
     plugin.add_argument('--timeout', type=int, default=900)
+    world = commands.add_parser('world', help='Biblioteca de mundos (hasta 50, uno activo)')
+    actions = world.add_subparsers(dest='world_action', required=True)
+    actions.add_parser('list')
+    create = actions.add_parser('create')
+    create.add_argument('name')
+    create.add_argument('--seed', default='')
+    activate = actions.add_parser('activate')
+    activate.add_argument('id')
+    activate.add_argument('--timeout', type=int, default=900)
+    activate.add_argument('--yes', action='store_true', help='Sin confirmación interactiva (panel)')
+    importer = actions.add_parser('import', help='Zip o carpeta de Java, o .mcworld de Bedrock')
+    importer.add_argument('path', type=Path)
+    importer.add_argument('name')
+    exporter = actions.add_parser('export')
+    exporter.add_argument('id')
+    exporter.add_argument('--format', choices=['java', 'bedrock'], default='java')
+    rename = actions.add_parser('rename')
+    rename.add_argument('id')
+    rename.add_argument('name')
+    remove = actions.add_parser('delete', help='Archiva en backups/worlds y borra (nunca el activo)')
+    remove.add_argument('id')
+    remove.add_argument('--yes', action='store_true')
     console = commands.add_parser('command', help='Enviar un comando administrativo mediante RCON interno')
     console.add_argument('text', nargs='+', help='Usa comillas, por ejemplo: "whitelist add Victor"')
     return p
@@ -213,6 +235,30 @@ def update(runtime, args, client):
         raise
 
 
+def manage_world(runtime, args, client):
+    from .worlds import Library
+    library = Library(runtime)
+    action = args.world_action
+    if action == 'list':
+        print(json.dumps(library.describe(), indent=2, ensure_ascii=False))
+    elif action == 'create':
+        print(library.create(args.name, args.seed))
+    elif action == 'rename':
+        library.rename(args.id, args.name)
+    elif action == 'import':
+        print(library.import_world(args.path, args.name, client))
+    elif action == 'export':
+        print(library.export(args.id, args.format, client))
+    elif action == 'activate':
+        if not args.yes:
+            confirm('CAMBIAR', 'Se parará el servidor (desconecta a los jugadores), se hará un backup y se activará otro mundo.')
+        library.activate(args.id, args.timeout, client)
+    elif action == 'delete':
+        if not args.yes:
+            confirm('BORRAR', 'El mundo se archivará en backups/worlds y después se borrará de la biblioteca.')
+        print(library.delete(args.id) or 'Sin datos generados que archivar.')
+
+
 def manage(runtime, args):
     command = args.command
     if os.environ.get('DOCKER_HOST') or os.environ.get('DOCKER_CONTEXT'):
@@ -297,6 +343,8 @@ def manage(runtime, args):
         LOG.info('Plugin %s %s.', args.name, 'activado' if enabled else 'desactivado')
         if running:
             runtime.start(args.timeout)
+    elif command == 'world':
+        manage_world(runtime, args, client)
     elif command == 'command':
         text = ' '.join(args.text).strip().lstrip('/')
         if not text or '\n' in text or '\r' in text or len(text) > 2000:
@@ -327,7 +375,8 @@ def main(argv=None):
         if getattr(args, 'timeout', 900) < 10 or getattr(args, 'timeout', 900) > 7200:
             raise Error('--timeout debe estar entre 10 y 7200 segundos.')
         readonly = (not writable or (args.mode == 'manage' and (args.command in ('logs', 'status')
-                     or (args.command == 'update' and args.plan))))
+                     or (args.command == 'update' and args.plan)
+                     or (args.command == 'world' and args.world_action == 'list'))))
         if readonly:
             (install if args.mode == 'install' else manage)(runtime, args)
         else:
