@@ -1,6 +1,7 @@
 """Panel web: validación del helper privilegiado y rutas HTTP sin Docker ni sudo."""
 import http.server
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -110,6 +111,52 @@ class HelperValidationTests(unittest.TestCase):
             (data / 'world').symlink_to(data / 'real', target_is_directory=True)
             self.assertIsNone(helper.world_spawn(data))
             self.assertIsNone(helper.world_spawn(Path(directory) / 'missing'))
+
+    def test_console_commands_are_single_printable_lines_without_lifecycle(self):
+        self.assertEqual(helper.parse(['console', '/give', '.Alguien', 'diamond', '3'])[1], ['give .Alguien diamond 3'])
+        self.assertEqual(helper.parse(['console', 'time set day'])[1], ['time set day'])
+        for argv in (['console', 'stop'], ['console', 'minecraft:stop'], ['console', 'RESTART'], ['console', 'bukkit:reload confirm'],
+                     ['console', 'say hi\nstop'], ['console', 'say \x1b[31m'], ['console', ''], ['console'],
+                     ['console', 'x' * 257]):
+            with self.subTest(argv=argv), self.assertRaises(ValueError):
+                helper.parse(argv)
+
+    def test_logs_hide_healthcheck_rcon_noise(self):
+        panel = helper.Panel.__new__(helper.Panel)
+        panel.server_log = Mock(return_value='[1 INFO]: Thread RCON Client /127.0.0.1 started\n[2 INFO]: Done\n'
+                                             '[3 INFO]: Thread RCON Client /127.0.0.1 shutting down\n[4 INFO]: §6joined\n')
+        self.assertEqual(panel.logs(10)['log'], '[2 INFO]: Done\n[4 INFO]: joined')
+
+    def test_texture_installer_accepts_only_listed_pngs(self):
+        import io
+        import tarfile
+        installer = load('install_assets')
+        def archive(entries):
+            buffer = io.BytesIO()
+            with tarfile.open(fileobj=buffer, mode='w') as tar:
+                for name, payload, kind in entries:
+                    info = tarfile.TarInfo(name)
+                    if kind == 'link':
+                        info.type, info.linkname = tarfile.SYMTYPE, '/etc/shadow'
+                    else:
+                        info.size = len(payload)
+                    tar.addfile(info, io.BytesIO(payload) if kind != 'link' else None)
+            buffer.seek(0)
+            return buffer
+        png = b'\x89PNG\r\n\x1a\n' + b'0' * 20
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'assets'
+            (target).mkdir()
+            (target / 'stale.png').write_bytes(png)
+            self.assertEqual(installer.install(archive([('logo.png', png, 'file'), ('dirt.png', png, 'file')]), target),
+                             ['dirt.png', 'logo.png'])
+            self.assertFalse((target / 'stale.png').exists())
+            for bad in ([('../evil.png', png, 'file')], [('logo.png', b'<svg onload=x>', 'file')],
+                        [('unknown.png', png, 'file')], [('logo.png', b'', 'link')],
+                        [('logo.png', b'\x89PNG\r\n\x1a\n' + b'0' * (300 * 1024), 'file')]):
+                with self.subTest(bad=bad[0][0]), self.assertRaises(ValueError):
+                    installer.install(archive(bad), target)
+            self.assertEqual((target / 'logo.png').read_bytes(), png)
 
     def test_floodgate_uuid_from_xuid(self):
         self.assertEqual(helper.floodgate_uuid('2535412345678901'), '00000000-0000-0000-0009-01f1b0392c35')
@@ -308,8 +355,11 @@ class PanelAppTests(unittest.TestCase):
     def setUp(self):
         self.helper = Mock(side_effect=self.fake_helper)
         self.calls = []
+        self.assets = tempfile.TemporaryDirectory()
+        self.addCleanup(self.assets.cleanup)
+        (Path(self.assets.name) / 'logo.png').write_bytes(b'\x89PNG\r\n\x1a\nfake')
         config = {'bind': '192.168.1.50', 'port': 8443, 'map_url': 'http://192.168.1.50:8100/',
-                  'password': server.hash_password('contraseña-larga', iterations=1000)}
+                  'password': server.hash_password('contraseña-larga', iterations=1000), 'assets_dir': self.assets.name}
         self.app = server.App(config)
         self.app.helper = self.helper
         self.app.jobs.runner = self.helper
@@ -337,35 +387,91 @@ class PanelAppTests(unittest.TestCase):
         return cookie, self.app.sessions[cookie.split('=', 1)[1]]['csrf']
 
     def test_anonymous_requests_redirect_to_login(self):
-        for method, path in (('GET', '/'), ('GET', '/whitelist'), ('POST', '/accion'), ('GET', '/mapa')):
+        for method, path in (('GET', '/'), ('GET', '/players'), ('POST', '/action'), ('GET', '/map'), ('GET', '/console')):
             self.assertEqual(self.request(method, path)[:2], (303, {'Location': '/login'}))
+        for method, path in (('GET', '/api/pulse'), ('GET', '/api/console'), ('POST', '/api/console')):
+            self.assertEqual(self.request(method, path)[0], 401)
         self.helper.assert_not_called()
 
     def test_foreign_host_header_is_rejected(self):
         # DNS rebinding: una página externa que resuelve su dominio a la Pi no llega a las rutas.
         self.assertEqual(self.request('GET', '/login', host='evil.example')[0], 421)
         self.assertEqual(self.request('POST', '/login', 'password=contrase%C3%B1a-larga', host='evil.example:8443')[0], 421)
+        self.assertEqual(self.request('GET', '/static/app.css', host='evil.example')[0], 421)
         self.assertEqual(self.request('GET', '/login', host='192.168.1.50')[0], 200)
+
+    def test_static_files_and_textures_are_allowlisted(self):
+        code, headers, body = self.request('GET', '/static/app.css')
+        self.assertEqual((code, headers['Content-Type']), (200, 'text/css; charset=utf-8'))
+        self.assertIn(b'Pixelify', body)
+        self.assertEqual(self.request('GET', '/static/fonts/VT323-Regular.ttf')[1]['Content-Type'], 'font/ttf')
+        self.assertEqual(self.request('GET', '/assets/logo.png')[:2], (200, {'Content-Type': 'image/png',
+                                                                            'Cache-Control': 'public, max-age=3600'}))
+        for path in ('/static/../helper.py', '/static/%2e%2e/helper.py', '/static/helper.py', '/assets/../panel.json',
+                     '/static/fonts/../../server.py', '/assets/LOGO.PNG', '/static/app.css.map'):
+            with self.subTest(path=path):
+                self.assertIn(self.request('GET', path)[0], (303, 404))
+
+    def test_legacy_spanish_routes_redirect(self):
+        cookie, _ = self.login()
+        for old, new in (('/whitelist', '/players'), ('/ajustes', '/world'), ('/logs', '/console'),
+                         ('/auditoria', '/health'), ('/cuenta', '/account')):
+            self.assertEqual(self.request('GET', old, cookie=cookie)[:2], (301, {'Location': new}))
+
+    def test_every_page_renders_in_english_with_hotbar_and_assets(self):
+        cookie, _ = self.login()
+        self.app.helper = Mock(side_effect=lambda argv, timeout=60: status() if argv[0] == 'status' else
+                               {'ok': True, 'output': '== Contenedor\nOK     En marcha\nAVISO  Whitelist\nFALLO  Algo',
+                                'log': '[17:00:00 INFO]: <script>x</script>'})
+        for path, marker in (('/', b'How to connect'), ('/players', b'Rejected attempts'), ('/world', b'Server settings'),
+                             ('/console', b'paper@craft-pi'), ('/backups', b'Latest backups'), ('/health', b'Server audit'),
+                             ('/account', b'Change password')):
+            with self.subTest(path=path):
+                code, _, body = self.request('GET', path, cookie=cookie)
+                self.assertEqual(code, 200)
+                self.assertIn(marker, body)
+                self.assertIn(b'class="hotbar"', body)
+                self.assertIn(b'/assets/logo.png', body)
+                self.assertNotIn(b'<script>x', body)
+                self.assertNotIn(b' style=', body)  # la CSP prohíbe estilos en línea
+                self.assertEqual(body.count(b'<script'), 1)  # sólo /static/app.js
+        health = self.request('GET', '/health', cookie=cookie)[2]
+        self.assertIn(b'<span class="badge">FAIL</span>', health)
+
+    def test_console_api_requires_csrf_header_and_validates_command(self):
+        cookie, csrf = self.login()
+        headers = {'Host': '192.168.1.50:8443', 'Cookie': cookie, 'Origin': 'https://192.168.1.50:8443'}
+        body = json.dumps({'command': 'time set day'}).encode()
+        self.assertEqual(self.app.handle('POST', '/api/console', headers, body, '192.168.1.9')[0], 403)
+        code, _, payload = self.app.handle('POST', '/api/console', dict(headers, **{'X-CSRF-Token': csrf}), body, '192.168.1.9')
+        self.assertEqual(code, 200)
+        self.assertEqual(self.calls[-1], ['console', 'time set day'])
+        evil = dict(headers, **{'X-CSRF-Token': csrf, 'Origin': 'https://evil.example'})
+        self.assertEqual(self.app.handle('POST', '/api/console', evil, body, '192.168.1.9')[0], 403)
+        self.assertEqual(self.app.handle('POST', '/api/console', dict(headers, **{'X-CSRF-Token': csrf}), b'{nope',
+                                         '192.168.1.9')[0], 400)
+        self.assertEqual(json.loads(self.request('GET', '/api/console?lines=999999', cookie=cookie)[2])['ok'], True)
+        self.assertEqual(self.calls[-1], ['logs', '200'])
 
     def test_map_controls_and_spawn_link(self):
         cookie, csrf = self.login()
-        body = self.request('GET', '/', cookie=cookie)[2]
-        self.assertIn(b'Ver mapa en el spawn', body)
+        body = self.request('GET', '/world', cookie=cookie)[2]
         self.assertIn(b'#world:-32:64:0:150', body)
-        self.assertIn(b'Pausar render', body)
-        self.assertEqual(self.request('GET', '/mapa', cookie=cookie)[1]['Location'],
+        self.assertIn(b'Pause rendering', body)
+        self.assertIn(b'Open live map at spawn', self.request('GET', '/', cookie=cookie)[2])
+        self.assertEqual(self.request('GET', '/map', cookie=cookie)[1]['Location'],
                          'http://192.168.1.50:8100/#world:-32:64:0:150:0:0:0:0:perspective')
-        self.request('POST', '/modulos', f'csrf={csrf}&do=render&value=off', cookie)
+        self.request('POST', '/world', f'csrf={csrf}&do=render&value=off', cookie)
         self.assertEqual(self.calls[-1], ['bluemap-render', 'off'])
         self.app.jobs.runner = Mock(return_value={'ok': True, 'output': ''})
-        location = self.request('POST', '/modulos', f'csrf={csrf}&do=plugin&value=off', cookie)[1]['Location']
-        self.assertTrue(location.startswith('/tarea/'))
+        location = self.request('POST', '/world', f'csrf={csrf}&do=plugin&value=off', cookie)[1]['Location']
+        self.assertTrue(location.startswith('/job/'))
         for _ in range(50):
             if self.app.jobs.runner.called:
                 break
             time.sleep(0.02)
         self.assertEqual(self.app.jobs.runner.call_args.args[0], ['plugin', 'bluemap', 'off'])
-        self.assertEqual(self.request('POST', '/modulos', f'csrf={csrf}&do=plugin&value=rm', cookie)[0], 400)
+        self.assertEqual(self.request('POST', '/world', f'csrf={csrf}&do=plugin&value=rm', cookie)[0], 400)
 
     def test_login_requires_same_origin_and_concurrent_attempts_respect_limit(self):
         self.assertEqual(self.request('POST', '/login', 'password=x', origin='https://evil.example')[0], 403)
@@ -391,22 +497,21 @@ class PanelAppTests(unittest.TestCase):
 
     def test_posts_require_csrf_and_same_origin(self):
         cookie, csrf = self.login()
-        self.assertEqual(self.request('POST', '/accion', 'do=stop', cookie)[0], 403)
-        self.assertEqual(self.request('POST', '/accion', f'do=stop&csrf={csrf}', cookie, origin='https://evil.example')[0], 403)
+        self.assertEqual(self.request('POST', '/action', 'do=stop', cookie)[0], 403)
+        self.assertEqual(self.request('POST', '/action', f'do=stop&csrf={csrf}', cookie, origin='https://evil.example')[0], 403)
         self.assertNotIn(['stop'], self.calls)
-        code, headers, _ = self.request('POST', '/accion', f'do=stop&csrf={csrf}', cookie, origin='https://192.168.1.50:8443')
+        code, headers, _ = self.request('POST', '/action', f'do=stop&csrf={csrf}', cookie, origin='https://192.168.1.50:8443')
         self.assertEqual(code, 303)
-        self.assertTrue(headers['Location'].startswith('/tarea/'))
+        self.assertTrue(headers['Location'].startswith('/job/'))
 
     def test_dashboard_escapes_server_provided_text(self):
         cookie, _ = self.login()
         code, _, body = self.request('GET', '/', cookie=cookie)
         self.assertEqual(code, 200)
-        self.assertNotIn(b'<script>', body)
+        self.assertNotIn(b'<script>alert', body)
         self.assertIn(b'&lt;script&gt;', body)
         self.assertIn(b'192.168.1.50:25565', body)
-        code, _, body = self.request('GET', '/ajustes', cookie=cookie)
-        self.assertIn(b'Hola &lt;b&gt;', body)
+        self.assertIn(b'Hola &lt;b&gt;', self.request('GET', '/world', cookie=cookie)[2])
 
     def test_only_one_long_job_at_a_time(self):
         cookie, csrf = self.login()
@@ -415,25 +520,29 @@ class PanelAppTests(unittest.TestCase):
             release.wait(5)
             return {'ok': True, 'output': 'fin'}
         self.app.jobs.runner = slow
-        first = self.request('POST', '/accion', f'do=backup&csrf={csrf}', cookie)
-        second = self.request('POST', '/accion', f'do=restart&csrf={csrf}', cookie)
-        self.assertTrue(first[1]['Location'].startswith('/tarea/'))
+        first = self.request('POST', '/action', f'do=backup&csrf={csrf}', cookie)
+        second = self.request('POST', '/action', f'do=restart&csrf={csrf}', cookie)
+        self.assertTrue(first[1]['Location'].startswith('/job/'))
         self.assertEqual(second[1]['Location'], '/')
+        job = first[1]['Location'].rsplit('/', 1)[1]
         page = self.request('GET', first[1]['Location'], cookie=cookie)[2]
         self.assertIn(b'http-equiv="refresh"', page)
+        self.assertIn(f'data-job="{job}"'.encode(), page)
+        self.assertEqual(json.loads(self.request('GET', f'/api/job/{job}', cookie=cookie)[2])['state'], 'running')
         release.set()
         for _ in range(50):
             if not self.app.jobs.busy():
                 break
             time.sleep(0.05)
-        self.assertIn(b'Terminado correctamente', self.request('GET', first[1]['Location'], cookie=cookie)[2])
+        self.assertIn(b'Finished', self.request('GET', first[1]['Location'], cookie=cookie)[2])
+        self.assertEqual(json.loads(self.request('GET', f'/api/job/{job}', cookie=cookie)[2])['state'], 'done')
 
     def test_settings_send_only_changed_values(self):
         cookie, csrf = self.login()
-        body = (f'csrf={csrf}&motd=Hola+%3Cb%3E&difficulty=hard&gamemode=survival&max-players=6&view-distance=6'
+        body = (f'csrf={csrf}&do=settings&motd=Hola+%3Cb%3E&difficulty=hard&gamemode=survival&max-players=6&view-distance=6'
                 '&simulation-distance=4&pvp=true&allow-flight=false&spawn-protection=16&online-mode=false')
         self.app.jobs.runner = Mock(return_value={'ok': True, 'output': ''})
-        code, headers, _ = self.request('POST', '/ajustes', body, cookie)
+        code, headers, _ = self.request('POST', '/world', body, cookie)
         self.assertEqual(code, 303)
         for _ in range(50):
             if self.app.jobs.runner.called:
@@ -443,23 +552,23 @@ class PanelAppTests(unittest.TestCase):
 
     def test_whitelist_actions_map_to_helper_verbs(self):
         cookie, csrf = self.login()
-        self.request('POST', '/whitelist', f'csrf={csrf}&do=add&edition=bedrock&name=Otro', cookie)
-        self.request('POST', '/whitelist', f'csrf={csrf}&do=remove&name=.Alguien', cookie)
-        self.request('POST', '/whitelist', f'csrf={csrf}&do=switch&value=off', cookie)
+        self.request('POST', '/players', f'csrf={csrf}&do=add&edition=bedrock&name=Otro', cookie)
+        self.request('POST', '/players', f'csrf={csrf}&do=remove&name=.Alguien', cookie)
+        self.request('POST', '/players', f'csrf={csrf}&do=switch&value=off', cookie)
         self.assertEqual(self.calls[-3:], [['whitelist-add', 'bedrock', 'Otro'], ['whitelist-remove', '.Alguien'],
                                            ['whitelist', 'off']])
-        self.assertEqual(self.request('POST', '/whitelist', f'csrf={csrf}&do=add&edition=root&name=x', cookie)[0], 400)
+        self.assertEqual(self.request('POST', '/players', f'csrf={csrf}&do=add&edition=root&name=x', cookie)[0], 400)
 
     def test_unknown_bedrock_gamertag_offers_temporary_opening(self):
         cookie, csrf = self.login()
-        page = self.request('GET', '/whitelist', cookie=cookie)[2]
-        self.assertIn(b'Abrir 5 min y esperar', page)
+        page = self.request('GET', '/players', cookie=cookie)[2]
+        self.assertIn(b'Open 5 min and wait', page)
         self.app.helper = Mock(side_effect=lambda argv, timeout=60: status() if argv[0] == 'status' else {
             'ok': False, 'output': '[18:15:19 ERROR]: [floodgate] Got an error from requesting the xuid of a Bedrock '
                                    'player: Unable to find user in our cache. Please try specifying their Floodgate UUID instead'})
-        self.request('POST', '/whitelist', f'csrf={csrf}&do=add&edition=bedrock&name=Otro', cookie)
-        page = self.request('GET', '/whitelist', cookie=cookie)[2].decode()
-        self.assertIn('Floodgate no conoce todavía a Otro', page)
+        self.request('POST', '/players', f'csrf={csrf}&do=add&edition=bedrock&name=Otro', cookie)
+        page = self.request('GET', '/players', cookie=cookie)[2].decode()
+        self.assertIn('Floodgate does not know Otro yet', page)
         self.assertNotIn('Got an error', page)
 
     def test_password_change_invalidates_other_sessions(self):
@@ -469,7 +578,7 @@ class PanelAppTests(unittest.TestCase):
             self.app.config_path = Path(directory) / 'panel.json'
             (Path(directory) / 'initial-password').write_text('vieja\n')
             body = f'csrf={csrf}&current=contrase%C3%B1a-larga&new=otra-clave-segura&repeat=otra-clave-segura'
-            self.request('POST', '/cuenta', body, cookie)
+            self.request('POST', '/account', body, cookie)
             self.assertTrue(server.check_password('otra-clave-segura', self.app.config['password']))
             self.assertFalse((Path(directory) / 'initial-password').exists())
             self.assertTrue(self.app.config_path.exists())
@@ -490,7 +599,10 @@ class PanelAppTests(unittest.TestCase):
         try:
             base = f'http://127.0.0.1:{httpd.server_address[1]}'
             with urlopen(f'{base}/login') as response:
-                self.assertIn("default-src 'none'", response.headers['Content-Security-Policy'])
+                csp = response.headers['Content-Security-Policy']
+                self.assertIn("default-src 'none'", csp)
+                self.assertIn("script-src 'self';", csp)
+                self.assertNotIn('unsafe-inline', csp)
                 self.assertEqual(response.headers['X-Frame-Options'], 'DENY')
                 self.assertEqual(response.headers['Cache-Control'], 'no-store')
                 # Con no-referrer los navegadores mandan Origin: null en formularios y el login fallaría.

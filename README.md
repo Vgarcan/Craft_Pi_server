@@ -469,15 +469,34 @@ sudo panel/install.sh --uninstall
 
 Abre `https://IP_DE_LA_PI:8443/` desde la LAN. Si escribes la dirección sin `https://`, el panel redirige solo. El certificado es autofirmado: el navegador avisará la primera vez. Compara su huella SHA-256 con la que imprime `install.sh` antes de aceptarlo.
 
-| Página | Qué permite |
+Desde la 0.4.0 la interfaz está **en inglés** y tiene un estilo inspirado en Minecraft:
+
+- **Navegación:** la barra de objetos del juego, con teclas 1–9 y rueda del ratón sobre la barra.
+- **Escena:** cielo, nubes y colinas de bloques con parallax.
+- **Componentes:** paneles de inventario, botones de piedra, barra de experiencia y corazones.
+- **Avisos:** con estilo de logro.
+- **Navegación sin recargar** (con JavaScript); todo sigue funcionando sin él.
+
+**Texturas.** Las texturas y el logo son de Mojang. `panel/install.sh` los extrae **en la Pi** del cliente que BlueMap ya descargó, con una lista cerrada (`panel/extract_assets.py`, ejecutado dentro del contenedor), los valida en el host (`panel/install_assets.py`: nombres permitidos, firma PNG, tamaño) y los sirve sólo en la LAN. No forman parte del repositorio. Sin ellas, el panel usa equivalentes en CSS. Las fuentes Pixelify Sans y VT323 son OFL y van en `panel/static/fonts/` con su licencia.
+
+| Página (tecla) | Qué permite |
 | --- | --- |
-| Estado | Salud, jugadores conectados, memoria, temperatura, avisos, versiones y últimos backups. Botones de arrancar, parar, reiniciar y backup |
-| Whitelist | Activar o desactivar; añadir jugadores Java, Bedrock (gamertag) o Bedrock por XUID; quitar; ver los **intentos rechazados** de las últimas 72 horas y permitirlos con un botón; **apertura temporal** para un jugador concreto |
-| Ajustes | MOTD, dificultad, modo de juego, jugadores máximos, distancias, PvP, vuelo y protección del spawn. Guardar reinicia el servidor |
-| Logs | Últimas 100, 200 o 500 líneas |
-| Auditoría | Resultado de `tools/audit.sh` |
-| Mapa | Enlace a BlueMap |
-| Cuenta | Cambio de contraseña |
+| Dashboard (1) | Estado y salud (corazones), jugadores conectados, memoria y temperatura en vivo, direcciones de conexión (clic para copiar), acciones y versiones |
+| Players (2) | Whitelist: activar o desactivar; añadir Java, Bedrock (gamertag) o Bedrock por XUID; quitar; **intentos rechazados** de las últimas 72 horas con «Allow» y «Open 5 min and wait»; apertura temporal |
+| World (3) | BlueMap (abrir, pausar o reanudar el render, desactivar o activar), borde del mundo, progreso de Chunky y ajustes de `server.properties` (guardar reinicia) |
+| Console (4) | Terminal con logs en vivo (sin el ruido del healthcheck) y **comandos de juego** con historial (↑↓), autocompletado (Tab) y atajos |
+| Backups (5) | Crear backup y últimas copias |
+| Health (6) | `tools/audit.sh` con OK/WARN/FAIL (los detalles salen en español) |
+| Live map (7) | BlueMap centrado en el spawn |
+| Account (8) | Cambio de contraseña |
+| Log out (9) | Cerrar sesión |
+
+**La consola ejecuta comandos de operador** (give, tp, op…), igual que `manage.sh command`. Las reglas:
+
+- Sólo una línea imprimible de hasta 256 caracteres.
+- `stop`, `restart` y `reload` están bloqueados, también con espacio de nombres (`minecraft:stop`). Para eso están los botones, que comprueban el cierre limpio.
+- Cada comando queda en `logs/operations.log`.
+- Desde JavaScript usa `POST /api/console` con el token CSRF en la cabecera `X-CSRF-Token` y el mismo `Origin`.
 
 **Diseño y seguridad:**
 
@@ -485,6 +504,7 @@ Abre `https://IP_DE_LA_PI:8443/` desde la LAN. Si escribes la dirección sin `ht
 - El helper sólo acepta verbos fijos y nombres que cumplen patrones cerrados; **nunca** envía texto libre a la consola. Los ajustes editables son una lista cerrada: autenticación, puertos y RCON no se tocan desde la web.
 - Las operaciones usan `manage.sh` o su mismo bloqueo, y quedan en `logs/operations.log` como `Operación: panel …`. Sigue habiendo un único responsable del proceso de Paper.
 - `install.sh` comprueba que el helper y todo el código que importa pertenecen a root y no admiten escritura de grupo u otros. Si alguien cambia esos permisos, la regla sudo deja de ser segura.
+- CSP sin código ni estilos en línea: `script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'`. Los anchos de las barras van por clases, no con `style=`.
 - Contraseña con PBKDF2-SHA256 (dos cálculos simultáneos como máximo). Cookie `__Host-` con `Secure`, `HttpOnly` y `SameSite=Strict`, token CSRF y comprobación de `Origin` en cada POST (también en el login), bloqueo tras 5 fallos en 10 minutos, CSP sin scripts y sin incrustación en otras páginas.
 - Sólo atiende el `Host` con el que se publica (contra DNS rebinding). TLS por conexión en su propio hilo, `Content-Length` estricto y límite de 32 conexiones en total y 8 por IP.
 - `data/` pertenece al usuario del contenedor: el helper no sigue enlaces en ningún componente de la ruta, sólo lee archivos regulares y con tope, y escribe `server.properties` mediante descriptores de directorio. El diagnóstico de Geyser se lee dentro del contenedor.

@@ -60,6 +60,19 @@ chown "$USER_NAME:$USER_NAME" "$cert" "$key"
 chmod 0600 "$key"
 chmod 0644 "$cert"
 
+# Texturas de Minecraft para el panel: se extraen DENTRO del contenedor del cliente que BlueMap
+# descargó de Mojang, y el host sólo acepta la lista cerrada de PNG. No se suben al repositorio.
+assets="$CONFIG_DIR/assets"
+tarball="$(mktemp "$CONFIG_DIR/.assets.XXXXXX")"
+if (cd "$PROJECT_DIR" && docker compose --project-name minecraft-lan --project-directory . --env-file .env \
+        -f compose.yaml exec -T minecraft python3 - < panel/extract_assets.py) > "$tarball" 2>/dev/null \
+   && python3 -I "$PROJECT_DIR/panel/install_assets.py" "$assets" "$USER_NAME" < "$tarball"; then
+    chown "$USER_NAME:$USER_NAME" "$assets"
+else
+    echo 'Aviso: texturas no disponibles (servidor parado o BlueMap sin cliente). El panel usará su estilo CSS.' >&2
+fi
+rm -f "$tarball"
+
 config="$CONFIG_DIR/panel.json"
 password_record=''
 if [[ ! -f $config || $mode == --reset-password ]]; then
@@ -76,13 +89,13 @@ if [[ ! -f $config || $mode == --reset-password ]]; then
         chown root:root "$CONFIG_DIR/initial-password"
     fi
 fi
-CONFIG="$config" BIND="$LAN_IP" PORT="$PORT" CERT="$cert" KEY="$key" RECORD="$password_record" python3 -I - <<'EOF'
+CONFIG="$config" BIND="$LAN_IP" PORT="$PORT" CERT="$cert" KEY="$key" RECORD="$password_record" ASSETS="$assets" python3 -I - <<'EOF'
 import json, os
 from pathlib import Path
 path = Path(os.environ['CONFIG'])
 config = json.loads(path.read_text()) if path.exists() else {}
 config.update(bind=os.environ['BIND'], port=int(os.environ['PORT']), cert=os.environ['CERT'], key=os.environ['KEY'],
-              map_url=f"http://{os.environ['BIND']}:8100/")
+              map_url=f"http://{os.environ['BIND']}:8100/", assets_dir=os.environ['ASSETS'])
 if os.environ['RECORD']:
     config['password'] = json.loads(os.environ['RECORD'])
 temporary = path.with_suffix('.new')

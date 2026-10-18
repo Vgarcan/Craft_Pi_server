@@ -110,7 +110,7 @@ def read_gzip_data(folder_fd, name, limit):
 def choice(*options):
     def check(value):
         if value not in options:
-            raise ValueError(f'debe ser uno de: {", ".join(options)}')
+            raise ValueError(f'must be one of: {", ".join(options)}')
         return value
     return check
 
@@ -118,14 +118,14 @@ def choice(*options):
 def integer(low, high):
     def check(value):
         if not re.fullmatch(r'[0-9]{1,3}', value) or not low <= int(value) <= high:
-            raise ValueError(f'debe ser un entero entre {low} y {high}')
+            raise ValueError(f'must be a whole number between {low} and {high}')
         return str(int(value))
     return check
 
 
 def motd(value):
     if not 1 <= len(value) <= 59 or any(ord(c) < 32 or c == '\x7f' for c in value) or '§' in value:
-        raise ValueError('de 1 a 59 caracteres imprimibles, sin códigos de color')
+        raise ValueError('must be 1 to 59 printable characters, without colour codes')
     return value
 
 
@@ -193,14 +193,30 @@ def validate_changes(pairs):
     for pair in pairs:
         key, separator, value = pair.partition('=')
         if not separator or key not in PROPERTIES or key in changes:
-            raise ValueError(f'ajuste no admitido: {key}')
+            raise ValueError(f'setting not allowed: {key}')
         try:
             changes[key] = PROPERTIES[key](value)
         except ValueError as exc:
             raise ValueError(f'{key} {exc}') from exc
     if not changes:
-        raise ValueError('no hay cambios')
+        raise ValueError('nothing to change')
     return changes
+
+
+# Comandos del ciclo de vida: tienen botones propios que comprueban el cierre limpio.
+BLOCKED_COMMANDS = {'stop', 'restart', 'reload'}
+# Líneas del healthcheck (RCON cada 30 s): ruido que oculta el log real.
+NOISE = ('Thread RCON Client',)
+
+
+def console_command(words):
+    """Comando de juego para la consola web: una línea imprimible; nunca stop/restart/reload."""
+    text = ' '.join(words).strip().lstrip('/')
+    if not 1 <= len(text) <= 256 or any(ord(c) < 32 or ord(c) == 127 for c in text):
+        raise ValueError('a command must be 1 to 256 printable characters on a single line')
+    if text.split()[0].lower().split(':')[-1] in BLOCKED_COMMANDS:
+        raise ValueError('use the Start, Stop and Restart buttons; reload is not supported')
+    return text
 
 
 def floodgate_uuid(xuid):
@@ -357,6 +373,15 @@ class Panel:
                 except Error:
                     render = None
             bluemap = {'version': active['bluemap']['version'], 'enabled': enabled, 'render': render}
+        world = {}
+        if players is not None:
+            for key, words in (('border', ('worldborder', 'get')), ('pregen', ('chunky', 'progress'))):
+                if key == 'pregen' and 'chunky' not in active:
+                    continue
+                try:
+                    world[key] = self.rcon(*words)
+                except Error:
+                    pass
         backups = sorted((self.root / 'backups').glob('*.tar.gz'), key=lambda p: p.stat().st_mtime, reverse=True)
         return {
             'release': {key: active[key] for key in ('id', 'minecraft', 'lan_ip') if key in active}
@@ -372,6 +397,7 @@ class Panel:
                           'memory': container_memory(info['Id']) if info else None},
             'players': players,
             'bluemap': bluemap,
+            'world': world,
             'spawn': world_spawn(self.runtime.data),
             'host': {'temperature': temperature(), 'memory_limits': host.memory_limits()},
             'pending_operation': (self.runtime.state / 'operation.json').exists(),
@@ -385,7 +411,27 @@ class Panel:
         }
 
     def logs(self, lines):
-        return {'log': COLOR.sub('', self.server_log(tail=lines))}
+        raw = COLOR.sub('', self.server_log(tail=min(lines * 4, 4000))).splitlines()
+        kept = [line for line in raw if not any(noise in line for noise in NOISE)]
+        return {'log': '\n'.join(kept[-lines:])}
+
+    def pulse(self):
+        """Estado ligero para refrescar el panel cada pocos segundos (sin leer logs)."""
+        info = self.runtime.container()
+        state = info['State'] if info else {}
+        players = None
+        if state.get('Running') and state.get('Health', {}).get('Status') == 'healthy':
+            try:
+                players = self.rcon('list')
+            except Error:
+                players = None
+        return {'running': bool(state.get('Running')), 'health': state.get('Health', {}).get('Status'),
+                'players': players, 'memory': container_memory(info['Id']) if info else None,
+                'temperature': temperature()}
+
+    def console(self, text):
+        LOG.info('Comando de consola del panel: %s', text)
+        return {'ok': True, 'output': self.rcon(text) or '(no output)'}
 
     def manage(self, *command):
         # manage.sh ya gestiona bloqueo, verificación y backups; se reutiliza tal cual.
@@ -401,11 +447,11 @@ class Panel:
             time.sleep(1)
             for entry in self.whitelist():
                 if target.lower() in (entry['uuid'].lower(), entry['name'].lower().lstrip('.')):
-                    return {'ok': True, 'output': f"Añadido {entry['name']} ({entry['uuid']})."}
+                    return {'ok': True, 'output': f"Added {entry['name']} ({entry['uuid']})."}
             errors = [line for line in self.server_log(since=since).splitlines() if '[floodgate]' in line]
             if errors:
                 return {'ok': False, 'output': COLOR.sub('', errors[-1])}
-        return {'ok': False, 'output': 'Floodgate no confirmó el alta. Revisa los logs.'}
+        return {'ok': False, 'output': 'Floodgate did not confirm the addition. Check the logs.'}
 
     def whitelist_add(self, edition, name):
         if edition == 'java':
@@ -417,7 +463,7 @@ class Panel:
     def whitelist_remove(self, name):
         entry = next((e for e in self.whitelist() if e['name'] == name), None)
         if not entry:
-            return {'ok': False, 'output': 'Ese jugador no está en la whitelist.'}
+            return {'ok': False, 'output': 'That player is not on the whitelist.'}
         return {'ok': True, 'output': self.rcon('whitelist', 'remove', name)}
 
     def whitelist_switch(self, value):
@@ -435,9 +481,9 @@ class Panel:
                 for joined in JOINED.findall(self.server_log(since=since)):
                     if joined.lower() == target:
                         output = self.rcon('whitelist', 'add', joined)
-                        return {'ok': True, 'output': f'{joined} entró y quedó añadido. {output}'}
+                        return {'ok': True, 'output': f'{joined} joined and was added. {output}'}
                 time.sleep(3)
-            return {'ok': False, 'output': f'{name} no entró en {minutes} minutos; no se añadió a nadie.'}
+            return {'ok': False, 'output': f'{name} did not join within {minutes} minutes; nobody was added.'}
         finally:
             self.rcon('whitelist', 'on')
             allowed = {entry['name'].lower() for entry in self.whitelist()}
@@ -453,11 +499,11 @@ class Panel:
         LOG.info('Ajustes cambiados desde el panel: %s', ', '.join(sorted(changes)))
         if running:
             self.runtime.start()
-        return {'ok': True, 'output': 'Ajustes guardados' + (' y servidor reiniciado.' if running else '.')}
+        return {'ok': True, 'output': 'Settings saved' + (' and server restarted.' if running else '.')}
 
     def bluemap_render_switch(self, value):
         output = self.rcon('bluemap', 'start' if value == 'on' else 'stop')
-        return {'ok': True, 'output': output or ('Render reanudado.' if value == 'on' else 'Render en pausa.')}
+        return {'ok': True, 'output': output or ('Render resumed.' if value == 'on' else 'Render paused.')}
 
     def plugin(self, name, value):
         return self.manage('plugin', name, value)
@@ -471,12 +517,12 @@ class Panel:
 def parse(argv):
     """Devuelve (verbo, argumentos normalizados, escribe) o lanza ValueError."""
     if not argv:
-        raise ValueError('falta el verbo')
+        raise ValueError('missing verb')
     verb, args = argv[0], argv[1:]
     def expect(count):
         if len(args) != count:
-            raise ValueError(f'{verb} necesita {count} argumento(s)')
-    if verb in ('status', 'audit'):
+            raise ValueError(f'{verb} needs {count} argument(s)')
+    if verb in ('status', 'audit', 'pulse'):
         expect(0)
         return verb, [], False
     if verb == 'logs':
@@ -490,12 +536,12 @@ def parse(argv):
         edition, name = args
         pattern = {'java': JAVA_NAME, 'bedrock': GAMERTAG, 'xuid': XUID}.get(edition)
         if not pattern or not pattern.fullmatch(name):
-            raise ValueError('nombre o XUID no válido')
+            raise ValueError('invalid name or XUID')
         return verb, [edition, name], True
     if verb == 'whitelist-remove':
         expect(1)
         if not (JAVA_NAME.fullmatch(args[0]) or BEDROCK_NAME.fullmatch(args[0])):
-            raise ValueError('nombre no válido')
+            raise ValueError('invalid name')
         return verb, args, True
     if verb == 'whitelist':
         expect(1)
@@ -505,17 +551,19 @@ def parse(argv):
         edition, name, minutes = args
         pattern = {'java': JAVA_NAME, 'bedrock': GAMERTAG}.get(edition)
         if not pattern or not pattern.fullmatch(name):
-            raise ValueError('edición o nombre no válido')
+            raise ValueError('invalid edition or name')
         return verb, [edition, name, int(integer(1, 15)(minutes))], True
     if verb == 'set-properties':
         return verb, [validate_changes(args)], True
+    if verb == 'console':
+        return verb, [console_command(args)], True
     if verb == 'bluemap-render':
         expect(1)
         return verb, [choice('on', 'off')(args[0])], True
     if verb == 'plugin':
         expect(2)
         return verb, [choice('bluemap')(args[0]), choice('on', 'off')(args[1])], False  # manage.sh bloquea
-    raise ValueError(f'verbo desconocido: {verb}')
+    raise ValueError(f'unknown verb: {verb}')
 
 
 def execute(panel, verb, args):
@@ -525,6 +573,10 @@ def execute(panel, verb, args):
         return {'ok': True, **panel.logs(*args)}
     if verb == 'audit':
         return panel.audit()
+    if verb == 'pulse':
+        return {'ok': True, **panel.pulse()}
+    if verb == 'console':
+        return panel.console(*args)
     if verb in ('start', 'stop', 'restart', 'backup'):
         return panel.manage(verb)
     if verb == 'whitelist-add':
@@ -546,7 +598,7 @@ def main(argv):
     try:
         verb, args, writes = parse(argv)
     except ValueError as exc:
-        print(json.dumps({'ok': False, 'output': f'Petición rechazada: {exc}'}))
+        print(json.dumps({'ok': False, 'output': f'Request rejected: {exc}'}))
         return 2
     # SIGTERM (p. ej. reinicio del panel) debe ejecutar los finally, como reabrir la whitelist.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))

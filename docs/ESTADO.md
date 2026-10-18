@@ -229,3 +229,12 @@ Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa
 - **Borde del mundo:** `worldborder center 1024 0` y `worldborder set 3200`. La Pi no genera terreno fuera de la zona pregenerada. Para ampliar, pregenera un radio mayor con Chunky y sube el borde.
 - **BlueMap:** ajuste único `craft-pi: tuning-1` con dos hilos de render y web con 250 bloques de detalle y 4000 de vista lejana. El navegador guarda la configuración en cookies: si sigue con los valores anteriores, usa *Settings → Reset* en el menú de BlueMap.
 - Duración y temperaturas: ver la tabla siguiente, que se completa al terminar.
+
+## Panel 0.4.0: rediseño en inglés y consola (18-10-2026)
+
+- **Interfaz:** estilo Minecraft (barra de objetos como navegación con teclas 1–9, parallax de cielo, nubes y colinas, paneles de inventario, botones de piedra, barra de experiencia, corazones, avisos tipo logro), toda en inglés. Navegación sin recarga con mejora progresiva.
+- **Texturas:** 49 texturas extraídas en la Pi del cliente 26.3 (dentro del contenedor) y validadas en el host. No están en el repositorio.
+- **Consola:** logs en vivo filtrados y comandos de operador validados (`console`), con historial y autocompletado.
+- **CSP endurecida:** sin `unsafe-inline`.
+- **Verificación:** vista previa local con Chromium sin pantalla (escritorio 1440 px y móvil 412 px), sin violaciones de CSP ni errores de JavaScript. 107 pruebas automatizadas.
+- **Pregeneración terminada:** 40.401 chunks en 25 min 04 s, a 16–24 chunks/s, con un máximo de unos 70 °C y sin throttling.
