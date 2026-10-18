@@ -10,11 +10,14 @@ from .common import Error
 PAPER = "https://fill.papermc.io/v3/projects/paper"
 GEYSER = "https://download.geysermc.org/v2/projects"
 SUPPORTED = "https://geysermc.org/wiki/geyser/supported-versions/"
-BLUEMAP = "https://hangar.papermc.io/api/v1/projects/Blue/BlueMap/versions"
+HANGAR = "https://hangar.papermc.io/api/v1/projects"
+# Plugins resueltos en Hangar: clave del lock → proyecto. BlueMap (mapa web) y Chunky
+# (pregeneración de terreno; en reposo no consume CPU).
+HANGAR_PLUGINS = {"bluemap": "Blue/BlueMap", "chunky": "pop4959/Chunky"}
 # Clave del lock → nombre del JAR en releases/<id>/ (y en data/plugins para los plugins).
 # Una release antigua puede no incluir todos: usa managed_jars(lock).
 JARS = {"paper": "paper.jar", "geyser": "Geyser-Spigot.jar", "floodgate": "floodgate-spigot.jar",
-        "bluemap": "BlueMap.jar"}
+        "bluemap": "BlueMap.jar", "chunky": "Chunky.jar"}
 
 
 def managed_jars(lock):
@@ -59,17 +62,22 @@ def plugin(client, project):
 
 
 def bluemap(client, minecraft):
-    """Última versión Release de BlueMap para Paper que declara soporte de esa versión exacta."""
-    versions = client.json(f"{BLUEMAP}?limit=25&offset=0&platform=PAPER")["result"]
+    return hangar(client, 'bluemap', minecraft)
+
+
+def hangar(client, key, minecraft):
+    """Última versión Release del plugin para Paper que declara soporte de esa versión exacta."""
+    project = HANGAR_PLUGINS[key]
+    versions = client.json(f"{HANGAR}/{project}/versions?limit=25&offset=0&platform=PAPER")["result"]
     compatible = [v for v in versions if v["channel"]["name"] == "Release"
                   and minecraft in v["platformDependencies"].get("PAPER", [])]
     if not compatible:
-        raise Error(f"No hay versión Release de BlueMap para Paper {minecraft}. "
+        raise Error(f"No hay versión Release de {project} para Paper {minecraft}. "
                     "Espera a que se publique; no se instala una versión no declarada compatible.")
     chosen = max(compatible, key=lambda v: v["createdAt"])
     download = chosen["downloads"]["PAPER"]
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", chosen["name"]) or not download.get("downloadUrl"):
-        raise Error("Versión o descarga de BlueMap inesperada.")
+        raise Error(f"Versión o descarga inesperada de {project}.")
     return {"version": chosen["name"], "sha256": download["fileInfo"]["sha256Hash"],
             "url": download["downloadUrl"]}
 
@@ -95,7 +103,7 @@ def resolve(client, requested="auto"):
     lock = {"schema": 1, "minecraft": version, "java": java,
             "paper": {"build": int(build["id"]), "sha256": artifact["checksums"]["sha256"],
                       "url": artifact["url"]}, "geyser": geyser, "floodgate": floodgate,
-            "bluemap": bluemap(client, version),
+            **{key: hangar(client, key, version) for key in HANGAR_PLUGINS},
             "compatibility": {**supported, "source": SUPPORTED,
                               "source_sha256": hashlib.sha256(html.encode()).hexdigest()}}
     # Cambios de presentación en la web no deben producir una release nueva.

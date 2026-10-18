@@ -33,7 +33,7 @@ FIXTURES = ROOT / 'tests/fixtures'
 class FakeClient:
     def json(self, url):
         if 'hangar.papermc.io' in url:
-            return read_json(FIXTURES / 'hangar_bluemap.json')
+            return read_json(FIXTURES / ('hangar_chunky.json' if 'Chunky' in url else 'hangar_bluemap.json'))
         if '/geyser/' in url:
             return read_json(FIXTURES / 'geyser_build.json')
         if '/floodgate/' in url:
@@ -70,6 +70,8 @@ class VersionsTests(unittest.TestCase):
         self.assertEqual(lock['geyser']['build'], 1265)
         self.assertNotIn('latest', lock['geyser']['url'])
         self.assertIn('bluemap', lock)
+        self.assertEqual(lock['chunky']['version'], '1.5.3')
+        self.assertEqual(lock['chunky']['sha256'], '530d2c7430a96a39957391b7088be144daa3108f7665896d1c23aa8dd4af32f3')
 
     def test_bluemap_newest_release_declaring_exact_version(self):
         lock = versions.resolve(FakeClient())
@@ -92,6 +94,12 @@ class VersionsTests(unittest.TestCase):
         client = FakeClient()
         client.json = lambda url: data if 'hangar' in url else FakeClient().json(url)
         self.assertNotEqual(versions.resolve(client)['id'], first['id'])
+
+    def test_entrypoint_syncs_every_managed_plugin_jar(self):
+        entrypoint = (ROOT / 'docker/entrypoint.sh').read_text()
+        for key, name in versions.JARS.items():
+            if key != 'paper':
+                self.assertIn(name, entrypoint)
 
     def test_old_release_without_bluemap_keeps_three_jars(self):
         self.assertEqual([k for k, _ in managed_jars({'paper': 1, 'geyser': 1, 'floodgate': 1})],
@@ -719,15 +727,20 @@ class BackupTests(unittest.TestCase):
         folder = self.root / 'BlueMap'
         script = ROOT / 'docker/bluemap-setup.sh'
         first = subprocess.run(['sh', str(script), str(folder)], capture_output=True, text=True, check=True)
-        self.assertEqual(first.stdout, '')
+        self.assertEqual(first.stdout.strip(), 'changed')  # ajuste único de core.conf recién creado
         core = folder / 'core.conf'
-        self.assertIn('render-thread-count: 1', core.read_text())
-        core.write_text('render-thread-count: 2\n')
+        self.assertIn('render-thread-count: 2', core.read_text())
+        self.assertEqual(core.read_text().count('render-thread-count'), 1)
+        core.write_text('render-thread-count: 3\n# craft-pi: tuning-1\n')
+        (folder / 'webapp.conf').write_text('hires-slider-default: 100\nlowres-slider-default: 2000\n')
         (folder / 'maps').mkdir()
         (folder / 'maps/world.conf').write_text('world: "world"\nignore-missing-light-data: false\n')
         second = subprocess.run(['sh', str(script), str(folder)], capture_output=True, text=True, check=True)
         self.assertEqual(second.stdout.strip(), 'changed')
-        self.assertEqual(core.read_text(), 'render-thread-count: 2\n')
+        self.assertEqual(core.read_text(), 'render-thread-count: 3\n# craft-pi: tuning-1\n')
+        webapp = (folder / 'webapp.conf').read_text()
+        self.assertIn('hires-slider-default: 250', webapp)
+        self.assertIn('lowres-slider-default: 4000', webapp)
         self.assertIn('ignore-missing-light-data: true', (folder / 'maps/world.conf').read_text())
         # Si el operador lo revierte después, no se vuelve a tocar.
         conf = folder / 'maps/world.conf'

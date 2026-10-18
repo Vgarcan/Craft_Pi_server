@@ -15,7 +15,7 @@ if [ ! -e "$folder/core.conf" ] && [ ! -L "$folder/core.conf" ]; then
 # (https://www.minecraft.net/eula), ya aceptada por el operador en eula.txt.
 accept-download: true
 data: "bluemap"
-render-thread-count: 1
+render-thread-count: 2
 update-cooldown: 60
 full-update-interval: 1440
 region-file-check-interval: 5
@@ -27,9 +27,25 @@ log: {
 }
 EOF
 fi
+# Ajuste único de rendimiento y vista (marca craft-pi: tuning-1). Si el operador cambia después estos
+# valores, se respetan. Dos hilos de render (4 núcleos; el render no usa el hilo principal) y una web
+# que carga más detalle cerca (250 bloques) y la vista aproximada lejana del mundo pregenerado (4000).
+tune() {
+    file="$1"; shift
+    if [ ! -f "$file" ] || [ -L "$file" ] || grep -q '^# craft-pi: tuning-1$' "$file"; then
+        return 0
+    fi
+    sed "$@" "$file" > "$file.mclan-new"
+    printf '\n# Ajuste de Craft Pi Server (una sola vez).\n# craft-pi: tuning-1\n' >> "$file.mclan-new"
+    mv -f "$file.mclan-new" "$file"
+    changed=1
+}
+changed=''
+tune "$folder/core.conf" -e 's/^render-thread-count: 1$/render-thread-count: 2/'
+tune "$folder/webapp.conf" -e 's/^hires-slider-default: 100$/hires-slider-default: 250/' \
+    -e 's/^lowres-slider-default: 2000$/lowres-slider-default: 4000/'
 # Paper 26.x (Moonrise) no deja la luz en el formato que BlueMap espera y sin este ajuste sólo se
 # renderiza la vista lejana. Se aplica una vez por mapa; si el operador lo revierte, se respeta.
-changed=''
 for conf in "$folder"/maps/*.conf; do
     if [ ! -f "$conf" ] || [ -L "$conf" ]; then
         continue
