@@ -7,6 +7,7 @@ la identidad de la release: cambiar un addon produce una release nueva y `update
 import hashlib
 from pathlib import Path
 import re
+import secrets
 import shutil
 import zipfile
 from .common import Error, run
@@ -72,14 +73,21 @@ def build(root, release, lock, key):
             shutil.copyfile(path, target)
         java = [p.relative_to(src).as_posix() for p in sorted(src.rglob('*.java'))]
         resources = [n for n in ('plugin.yml', 'config.yml') if (src / n).exists()]
-        script = ('set -eu; cd /src; javac --release 21 -proc:none -Xlint:-options -cp "/cp/*" -d /out/classes '
-                  + ' '.join(java) + '; cp ' + ' '.join(resources) + ' /out/classes/; '
-                  'jar --create --file /out/addon.jar -C /out/classes .')
-        if any(not re.fullmatch(r'[A-Za-z0-9_./-]+', n) for n in java + resources):
+        # Cada componente empieza por letra o dígito: ningún nombre puede parecer una opción de javac o cp.
+        if any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*(?:/[A-Za-z0-9][A-Za-z0-9_.-]*)*', n) for n in java + resources):
             raise Error(f'addons/{folder}: nombres de archivo no admitidos.')
-        run(['docker', 'run', '--rm', '--network', 'none', '--platform', 'linux/arm64',
-             '-v', f'{classpath}:/cp:ro', '-v', f'{src}:/src:ro', '-v', f'{out}:/out',
-             lock['jdk_base'], 'sh', '-c', script], timeout=600)
+        script = (f'set -eu; cd /src; javac --release {int(lock["java"])} -proc:none -Xlint:-options -cp "/cp/*" '
+                  '-d /out/classes ' + ' '.join(java) + '; cp ' + ' '.join(resources) + ' /out/classes/; '
+                  'jar --create --file /out/addon.jar -C /out/classes .')
+        container = f'mclan-addon-{key.replace("_", "-")}-{secrets.token_hex(4)}'
+        try:
+            run(['docker', 'run', '--rm', '--name', container, '--network', 'none', '--platform', 'linux/arm64',
+                 '-v', f'{classpath}:/cp:ro', '-v', f'{src}:/src:ro', '-v', f'{out}:/out',
+                 lock['jdk_base'], 'sh', '-c', script], timeout=600)
+        except BaseException:
+            # Tras un timeout el contenedor seguiría compilando sobre carpetas que se van a borrar.
+            run(['docker', 'rm', '-f', container], capture=True, check=False)
+            raise
         with zipfile.ZipFile(out / 'addon.jar') as jar:
             if 'plugin.yml' not in jar.namelist():
                 raise Error(f'{name} no contiene plugin.yml.')

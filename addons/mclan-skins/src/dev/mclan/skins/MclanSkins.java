@@ -40,6 +40,15 @@ import org.jose4j.json.JsonUtil;
  */
 public final class MclanSkins extends JavaPlugin {
     private static final int MAX_IMAGE = 512 * 512 * 4;
+    // Límites de lo que se reenvía a otros clientes: una skin fuera de ellos usa la de Geyser.
+    private static final int MAX_ANIMATIONS = 8;
+    private static final int MAX_PIECES = 64;
+    private static final int MAX_TINTS = 16;
+    private static final int MAX_COLORS = 8;
+    private static final int MAX_ID = 256;
+    private static final int MAX_GEOMETRY = 1024 * 1024;
+    private static final int MAX_ANIMATION_DATA = 64 * 1024;
+    private static final int MAX_PATCH = 16 * 1024;
     /** XUID → skin completa. Geyser pone el XUID en todas las entradas, también en la del propio jugador. */
     private final Map<String, SerializedSkin> skins = new ConcurrentHashMap<>();
     private Field upstreamField;
@@ -101,16 +110,23 @@ public final class MclanSkins extends JavaPlugin {
     static SerializedSkin completeSkin(BedrockClientData data) throws Exception {
         String jwt = data.getOriginalString();
         String[] parts = jwt == null ? new String[0] : jwt.split("\\.");
-        if (parts.length != 3 || data.getSkinData() == null || data.getSkinData().length > MAX_IMAGE) {
+        if (parts.length != 3 || !image(data.getSkinImageWidth(), data.getSkinImageHeight(), data.getSkinData())
+                || data.getGeometryData() == null || data.getGeometryData().length > MAX_GEOMETRY
+                || data.getGeometryName() == null || data.getGeometryName().length > MAX_PATCH) {
             return null;
         }
         Map<String, Object> claims = JsonUtil.parseJson(new String(Base64.getUrlDecoder().decode(parts[1]),
                 StandardCharsets.UTF_8));
+        if (list(claims, "AnimatedImageData").size() > MAX_ANIMATIONS || list(claims, "PersonaPieces").size() > MAX_PIECES
+                || list(claims, "PieceTintColors").size() > MAX_TINTS
+                || text(claims, "SkinAnimationData").length() > MAX_ANIMATION_DATA) {
+            return null;
+        }
         List<AnimationData> animations = new ArrayList<>();
         for (Object item : list(claims, "AnimatedImageData")) {
             Map<?, ?> animation = (Map<?, ?>) item;
             byte[] image = Base64.getDecoder().decode((String) animation.get("Image"));
-            if (image.length > MAX_IMAGE) {
+            if (!image(number(animation, "ImageWidth"), number(animation, "ImageHeight"), image)) {
                 return null;
             }
             animations.add(new AnimationData(
@@ -122,14 +138,24 @@ public final class MclanSkins extends JavaPlugin {
         List<PersonaPieceData> pieces = new ArrayList<>();
         for (Object item : list(claims, "PersonaPieces")) {
             Map<?, ?> piece = (Map<?, ?>) item;
+            if (!ids(piece, "PieceId", "PieceType", "PackId", "ProductId")) {
+                return null;
+            }
             pieces.add(new PersonaPieceData(text(piece, "PieceId"), text(piece, "PieceType"), text(piece, "PackId"),
                     Boolean.TRUE.equals(piece.get("IsDefault")), text(piece, "ProductId")));
         }
         List<PersonaPieceTintData> tints = new ArrayList<>();
         for (Object item : list(claims, "PieceTintColors")) {
             Map<?, ?> tint = (Map<?, ?>) item;
+            List<?> given = (List<?>) tint.get("Colors");
+            if (!ids(tint, "PieceType") || given.size() > MAX_COLORS) {
+                return null;
+            }
             List<String> colors = new ArrayList<>();
-            for (Object color : (List<?>) tint.get("Colors")) {
+            for (Object color : given) {
+                if (String.valueOf(color).length() > MAX_ID) {
+                    return null;
+                }
                 colors.add(String.valueOf(color));
             }
             tints.add(new PersonaPieceTintData(text(tint, "PieceType"), colors));
@@ -142,7 +168,7 @@ public final class MclanSkins extends JavaPlugin {
                 .skinResourcePatch(new String(data.getGeometryName(), StandardCharsets.UTF_8))
                 .skinData(ImageData.of(data.getSkinImageWidth(), data.getSkinImageHeight(), data.getSkinData()))
                 .animations(animations)
-                .capeData(cape == null || cape.length == 0 ? ImageData.EMPTY
+                .capeData(cape == null || !image(data.getCapeImageWidth(), data.getCapeImageHeight(), cape) ? ImageData.EMPTY
                         : ImageData.of(data.getCapeImageWidth(), data.getCapeImageHeight(), cape))
                 .geometryData(new String(data.getGeometryData(), StandardCharsets.UTF_8))
                 .geometryDataEngineVersion(engine.isEmpty() ? ""
@@ -160,6 +186,21 @@ public final class MclanSkins extends JavaPlugin {
                 .overridingPlayerAppearance(true)
                 .trusted(true)
                 .build();
+    }
+
+    /** Imagen RGBA cuyo tamaño declarado coincide con sus bytes y no supera el máximo. */
+    private static boolean image(int width, int height, byte[] bytes) {
+        return bytes != null && width > 0 && height > 0 && width <= 512 && height <= 512
+                && (long) width * height * 4 == bytes.length;
+    }
+
+    private static boolean ids(Map<?, ?> map, String... keys) {
+        for (String key : keys) {
+            if (text(map, key).length() > MAX_ID) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static List<?> list(Map<?, ?> map, String key) {

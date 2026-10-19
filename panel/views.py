@@ -358,9 +358,10 @@ class Views:
                                 f'<p class="muted">Total XP {e(vitals.get("xp_total") or 0)} · abilities: {e(abilities)}</p>',
                                 'r-vitals', icon=self.texture('golden_apple', '', 'icon'))
         def where(entry):
-            if not entry or not entry.get('pos'):
+            pos = (entry or {}).get('pos')
+            if not isinstance(pos, list) or len(pos) < 3 or not all(isinstance(v, (int, float)) and abs(v) < 1e8 for v in pos[:3]):
                 return '—'
-            x, y, z = (round(v) for v in entry['pos'][:3])
+            x, y, z = (round(v) for v in pos[:3])
             link = ''
             if map_base and entry.get('dimension') in ('overworld', ''):
                 link = (f' <a class="mc-btn small" href="{e(map_base)}#world:{x}:{y}:{z}:80:0:0:0:0:perspective" '
@@ -494,9 +495,10 @@ class Views:
         # Teletransporte
         location = p['location']
         def spot(entry):
-            if not entry or not entry.get('pos'):
+            pos = (entry or {}).get('pos')
+            if not isinstance(pos, list) or len(pos) < 3 or not all(isinstance(v, (int, float)) and abs(v) < 1e8 for v in pos[:3]):
                 return 'not set'
-            x, y, z = (round(v) for v in entry['pos'][:3])
+            x, y, z = (round(v) for v in pos[:3])
             return f'{catalog.DIMENSIONS.get(entry.get("dimension") or "overworld", "?")} {x}, {y}, {z}'
         quick = ('<div class="tp-grid">'
                  + f'<div class="tp-spot">{self.item_icon("compass")}<div><b>World spawn</b><span class="muted mono small">'

@@ -217,7 +217,12 @@ def restore(runtime, path, client, timeout, *, ip_override=None):
         release.parent.mkdir(parents=True, exist_ok=True)
         if release.exists():
             for p in (staging / 'releases' / active['id']).iterdir():
-                if p.name != 'versions.lock.json' and sha256(release / p.name) != sha256(p):
+                if p.name == 'versions.lock.json':
+                    continue
+                if not (release / p.name).exists():
+                    # Release incompleta (p. ej. una compilación interrumpida): se completa con el backup.
+                    shutil.copy2(p, release / p.name)
+                elif sha256(release / p.name) != sha256(p):
                     raise Error('La release existente difiere del backup; no se sobrescribe.')
         else:
             shutil.copytree(staging / 'releases' / active['id'], release)

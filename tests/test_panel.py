@@ -255,6 +255,63 @@ class HelperValidationTests(unittest.TestCase):
             with self.subTest(argv=argv), self.assertRaises(ValueError):
                 helper.parse(argv)
 
+    def test_root_writes_panel_config_without_following_links(self):
+        import getpass
+        import os
+        tool = load('install_config')
+        user = getpass.getuser()
+        with tempfile.TemporaryDirectory() as directory, patch.object(tool.os, 'fchown'):
+            base = Path(directory)
+            (base / 'data').mkdir()
+            # Organización anterior: panel.json y la contraseña inicial en la raíz.
+            (base / 'panel.json').write_text(json.dumps({'password': {'hash': 'old'}, 'port': 1}))
+            (base / 'initial-password').write_text('vieja\n')
+            real_fstat = os.fstat  # la contraseña inicial antigua debe ser de root: se simula el propietario
+            with patch.object(tool.os, 'fstat', side_effect=lambda fd: os.stat_result((*real_fstat(fd)[:4], 0, *real_fstat(fd)[5:]))):
+                tool.configure(str(base), user, {'set': {'port': 8443}, 'password': None})
+            config = json.loads((base / 'data/panel.json').read_text())
+            self.assertEqual((config['port'], config['password']), (8443, {'hash': 'old'}))
+            self.assertEqual((base / 'data/initial-password').read_text(), 'vieja\n')
+            self.assertFalse((base / 'panel.json').exists() or (base / 'initial-password').exists())
+            self.assertEqual((base / 'data/panel.json').stat().st_mode & 0o777, 0o600)
+            # Un enlace plantado por el panel no se sigue: se rechaza sin tocar el destino.
+            target = base / 'outside'
+            target.write_text('intacto')
+            (base / 'data/panel.json').unlink()
+            (base / 'data/panel.json').symlink_to(target)
+            with self.assertRaises(tool.Unsafe):
+                tool.configure(str(base), user, {'set': {'port': 1}})
+            self.assertEqual(target.read_text(), 'intacto')
+            with self.assertRaises(tool.Unsafe):
+                tool.open_dir(str(target))
+            # Contraseña inicial: se escribe nueva y se borra al fijar otra.
+            with patch('sys.stdin', Mock(buffer=Mock(read=lambda n: b'nueva\n'))):
+                tool.main(['initial', str(base)])
+            self.assertEqual((base / 'data/initial-password').read_text(), 'nueva\n')
+            tool.main(['drop-initial', str(base)])
+            self.assertFalse((base / 'data/initial-password').exists())
+        self.assertIn('install_config.py" config "$CONFIG_DIR"', (ROOT / 'panel/install.sh').read_text())
+
+    def test_hardened_player_inputs(self):
+        for text in ('hola\u202eolleh', 'zero\u200bwidth', 'surrogate\ud800'):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                helper.parse(['player-action', 'message', 'Steve', 'chat', text])
+        self.assertEqual(helper.parse(['player-action', 'message', 'Steve', 'chat', 'Hola 😀'])[1][-1], 'Hola 😀')
+        panel = helper.Panel.__new__(helper.Panel)
+        panel.players = Mock(return_value={'players': [
+            {'name': 'Steve', 'uuid': '11111111-2222-3333-4444-555555555555', 'online': True},
+            {'name': 'Steve', 'uuid': '66666666-2222-3333-4444-555555555555', 'online': True}]})
+        panel.rcon = Mock(return_value='ok')
+        self.assertIn('Several known players', panel.player_action('op', 'Steve')['output'])
+        panel.rcon.assert_not_called()
+        panel.runtime = Mock(data=Path('/nonexistent'))
+        with patch.object(helper, 'read_data', return_value=b''), patch.object(helper.nbt, 'loads', return_value={}), \
+             patch.object(helper, 'profile_from', return_value={'location': {'death': {'dimension': 'overworld',
+                                                                                         'pos': [float('inf'), 1, 2]}}}):
+            self.assertIsNone(panel.stored_location('x', 'death'))
+        app = server.App({'bind': '127.0.0.1', 'port': 1, 'password': {}}, helper=['/bin/true'])
+        self.assertFalse(app.helper(['player-action', 'message', 'Steve', 'chat', 'nul\x00byte'])['ok'])
+
     def test_player_actions_only_for_known_players(self):
         panel = helper.Panel.__new__(helper.Panel)
         panel.players = Mock(return_value={'players': [

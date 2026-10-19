@@ -381,3 +381,44 @@ Antes de publicar los cambios se auditó si una instalación nueva reproduce tod
   - El MANIFEST queda documentado para descargas ZIP.
 - **Verificado en hardware:** `update` con la verificación nueva («Verificación local correcta»), `panel/install.sh` y `tools/audit.sh` sin fallos.
 - **Pendiente de hardware:** la espera de texturas sólo se ensayará en una instalación nueva, porque aquí el cliente ya estaba descargado.
+
+## 0.8.2: segunda auditoría (19-10-2026)
+
+Tres revisiones independientes, de sólo lectura (documentación frente a código, instalación desde cero y seguridad de los cambios recientes), más pruebas prácticas en la Pi.
+
+- **Comprobado en la Pi:**
+  - El ajuste de `cmdline.txt` del README es idempotente y deja una sola línea.
+  - El ZIP de GitHub conserva los permisos de ejecución y pasa el MANIFEST.
+  - `plugin mclan_skins off` retira el JAR, `on` lo devuelve y la auditoría queda sin fallos.
+  - La espera de texturas de `panel/install.sh`, simulada con un Docker falso, es correcta en los cinco casos.
+- **Seguridad (corregido):**
+  - `panel/install.sh` corría como root dentro de `/etc/mclan-panel`, que era del usuario del panel, y seguía enlaces. Un panel comprometido podía preparar un enlace y conseguir root en la siguiente reinstalación.
+    - Ahora la carpeta es de root, el panel sólo escribe en `data/`, y root escribe ahí con `panel/install_config.py` (descriptores de directorio, `O_NOFOLLOW`, `O_EXCL`).
+    - Las texturas quedan de root.
+    - Migración automática de la organización anterior.
+  - `tools/audit.sh` lee `data/` con `mclan.safefs` (sin enlaces y con tope) y usa `python3 -I`.
+  - MclanSkins limita lo que reenvía (512×512, 8 animaciones, 64 piezas, 16 tintes, 1 MiB de geometría, tamaños de imagen coherentes).
+  - Los mensajes rechazan caracteres invisibles de formato (Cf).
+  - Una acción sobre un nombre compartido por dos UUID se rechaza.
+  - Entradas con NUL o surrogates no tumban el panel.
+  - Coordenadas imposibles en los `.dat` no rompen el perfil ni el helper.
+  - `addons/` debe ser de root para instalar el panel.
+- **Instalación (corregido):**
+  - **Whitelist:** una instalación nueva no la activaba, aunque la documentación decía que sí. Ahora `white-list=true` y `enforce-whitelist=true`, y la auditoría avisa si está apagada.
+  - **Addons desactivados:** un addon desactivado no se compila ni necesita el JDK. Si MclanSkins no compila en la primera instalación: `install.sh --disable-plugin mclan_skins`. Al reactivar un addon que no está en la release, `update` lo compila.
+  - **Compilación:** el contenedor tiene nombre y se elimina si se pasa de tiempo; usa `--release` con la Java de la release; los nombres de archivo deben empezar por letra o dígito.
+  - **Auditoría:** ya no da FALLO con BlueMap desactivado.
+  - **`MCLAN_ASSETS_WAIT`:** con un cero delante ya no rompe la instalación.
+  - **Certificado:** se regenera si clave y certificado no casan, y el temporal de texturas se borra siempre.
+  - **`restore`:** completa una release a medias en lugar de fallar.
+- **Documentación (corregido):**
+  - Whitelist.
+  - Qué acciones funcionan sin conexión.
+  - Formato de respuesta de cada ruta de la API y rutas que faltaban.
+  - «Y vacía» sólo en el Overworld.
+  - Cómo pasar `MCLAN_ASSETS_WAIT` con sudo.
+  - `compose.yaml` editado bloquea todas las operaciones.
+  - Apertura temporal de 1 a 15 minutos y subidas que necesitan JavaScript.
+  - Ruta nueva de la contraseña inicial (`/etc/mclan-panel/data/initial-password`).
+  - Se retira el paquete ZIP original de la guía.
+- **Pruebas:** 145.

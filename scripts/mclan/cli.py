@@ -13,7 +13,7 @@ import tarfile
 import zipfile
 import zlib
 
-from . import backups, host, versions
+from . import addons, backups, host, versions
 from .common import Error, LOG, atomic_write, confirm, create_only, read_json, run, write_json
 from .net import Client
 from .runtime import Runtime, initialize_data
@@ -31,6 +31,8 @@ def parser():
     install.add_argument('--lan-ip', default=None, help='IPv4 LAN; auto sólo si existe una interfaz candidata')
     install.add_argument('--minecraft-version', default=None, help='auto o versión compatible con Geyser')
     install.add_argument('--timeout', type=int, default=900)
+    install.add_argument('--disable-plugin', action='append', default=[], choices=['bluemap', 'mclan_skins'],
+                         help='Instalar con este plugin opcional desactivado (repetible)')
     manage = actions.add_parser('manage', help='Administrar la instalación actual')
     commands = manage.add_subparsers(dest='command', required=True)
     for name in ('start', 'stop', 'restart', 'status', 'backup', 'verify'):
@@ -162,6 +164,8 @@ def install(runtime, args):
         raise Error('data/ contiene datos sin estado gestionado. No se importarán ni sobrescribirán. '
                     'Conserva una copia y utiliza un directorio de proyecto nuevo.')
     lock = versions.resolve(client, current['minecraft_version'])
+    if args.disable_plugin:
+        lock['disabled_plugins'] = sorted(set(args.disable_plugin))
     host.free_ports(ip)
     host.setup_docker(release, client)
     lock = runtime.stage(lock, client, ip)
@@ -186,6 +190,10 @@ def update(runtime, args, client):
     # Lo que el operador desactivó sigue desactivado en la release nueva.
     if active.get('disabled_plugins'):
         proposal['disabled_plugins'] = list(active['disabled_plugins'])
+    # Un addon activado que la release activa no incluye (se desactivó sin compilar) hay que compilarlo.
+    missing = [key for key in addons.ADDONS if key in proposal and key not in active
+               and key not in active.get('disabled_plugins', [])]
+    project_changed = project_changed or bool(missing)
     for label, lock in (('Actual', active), ('Propuesta', proposal)):
         extras = ''.join(f"; {name} {lock[key]['version']}" for key, name in versions.EXTRA_PLUGINS if key in lock)
         print(f"{label}: Minecraft {lock['minecraft']}; Paper {lock['paper']['build']}; "
@@ -342,8 +350,10 @@ def manage(runtime, args):
             return
         running = runtime.running()
         runtime.stop()
-        runtime.set_plugin(args.name, enabled)
+        active = runtime.set_plugin(args.name, enabled)
         LOG.info('Plugin %s %s.', args.name, 'activado' if enabled else 'desactivado')
+        if enabled and args.name not in active:
+            print(f'{args.name} no está compilado en la release activa: ejecuta sudo ./manage.sh update para compilarlo.')
         if running:
             runtime.start(args.timeout)
     elif command == 'world':

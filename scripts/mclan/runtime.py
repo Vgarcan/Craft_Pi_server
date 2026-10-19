@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import time
 import zipfile
 
@@ -144,10 +145,7 @@ class Runtime:
         staged = release / 'versions.lock.json'
         existing = read_json(staged) if staged.exists() else {}
         lock['java_base'] = existing.get('java_base') or pin_temurin(f"{lock['java']}-jre-jammy")
-        if any(key in lock for key in addons.ADDONS):
-            # El JDK sólo compila los addons; la imagen del servidor sigue usando el JRE.
-            lock['jdk_base'] = existing.get('jdk_base') or pin_temurin(f"{lock['java']}-jdk-jammy")
-            self.build_addons(lock, release, existing)
+        self.build_addons(lock, release, existing)
         # La imagen se identifica también por el código de arranque/salud y la base Java.
         import hashlib
         material = lock['java_base'] + ''.join(sha256(self.root / 'docker' / n) for n in RUNTIME_FILES)
@@ -162,22 +160,36 @@ class Runtime:
         return lock
 
     def build_addons(self, lock, release, existing):
-        """Compila los addons de la release (o reutiliza los ya compilados con el mismo código)."""
+        """Compila los addons de la release, o reutiliza los ya compilados con el mismo código.
+
+        Un addon desactivado no se compila (ni necesita el JDK): si no hay una compilación reutilizable,
+        la release queda sin él, y al reactivarlo el siguiente update lo compila."""
+        disabled = set(lock.get('disabled_plugins', []))
+        pending = []
         for key in [key for key in addons.ADDONS if key in lock]:
             lock[key] = dict(lock[key])
             jar = release / addons.ADDONS[key][1]
             if existing.get(key, {}).get('source_sha256') == lock[key]['source_sha256'] and jar.exists() \
                     and sha256(jar) == existing[key].get('sha256'):
                 lock[key]['sha256'] = existing[key]['sha256']
-                continue
+            elif key in disabled:
+                LOG.info('%s está desactivado: no se compila (al activarlo, update lo compilará).', key)
+                del lock[key]
+            else:
+                pending.append(key)
+        if existing.get('jdk_base'):
+            lock['jdk_base'] = existing['jdk_base']
+        if not pending:
+            return
+        # El JDK sólo compila los addons; la imagen del servidor sigue usando el JRE.
+        lock.setdefault('jdk_base', pin_temurin(f"{lock['java']}-jdk-jammy"))
+        for key in pending:
             try:
                 lock[key]['sha256'] = sha256(addons.build(self.root, release, lock, key))
-            except Error as exc:
-                # Un addon desactivado no bloquea la actualización: la release queda sin él.
-                if key not in lock.get('disabled_plugins', []):
-                    raise Error(f'{exc} Para actualizar sin él: manage.sh plugin {key} off, y repite.') from exc
-                LOG.warning('%s no compila con esta release y está desactivado: se omite (%s).', key, exc)
-                del lock[key]
+            except (Error, subprocess.SubprocessError) as exc:
+                raise Error(f'{exc} Para seguir sin {key}: en la primera instalación, install.sh '
+                            f'--disable-plugin {key}; en una instalación existente, manage.sh plugin {key} off. '
+                            'Después repite.') from exc
 
     def activate(self, active):
         # La marca se escribe ANTES desde update/restore para detectar interrupciones.
@@ -239,7 +251,9 @@ class Runtime:
         if name not in OPTIONAL_PLUGINS:
             raise Error(f'Plugin no gestionable: {name}')
         active = self.active()
-        if name not in active:
+        # Un addon que no está en la release (se desactivó y no se compiló) se puede activar: el
+        # siguiente update lo compila.
+        if name not in active and not (enabled and name in addons.ADDONS):
             raise Error(f'La release activa no incluye {name}.')
         disabled = set(active.get('disabled_plugins', []))
         if enabled:
@@ -393,6 +407,8 @@ def initialize_data(runtime, accepted, config_version=10):
                 'server-ip=\nserver-port=25565\nonline-mode=true\nenforce-secure-profile=false\n'
                 'level-name=world\nview-distance=6\nsimulation-distance=4\nmax-players=6\n'
                 'motd=Minecraft LAN - Raspberry Pi\nspawn-protection=16\ndifficulty=normal\n'
+                # Sólo entran los jugadores que añada el operador (panel: Players → Add a player).
+                'white-list=true\nenforce-whitelist=true\n'
                 'enable-status=true\nenable-query=false\nenable-rcon=true\nrcon.port=25575\n'
                 f'rcon.password={password}\nbroadcast-rcon-to-ops=false\n')
     if accepted:

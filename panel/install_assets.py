@@ -1,8 +1,9 @@
 """Valida en el host el tar de texturas que produce extract_assets.py y lo instala.
 
 El tar procede del contenedor, que es menos fiable que el host: sólo se aceptan nombres de la lista
-cerrada, archivos regulares, firma PNG y un tamaño acotado. Uso (root, desde install.sh):
-    python3 -I panel/install_assets.py DESTINO PROPIETARIO < assets.tar
+cerrada, archivos regulares, firma PNG y un tamaño acotado. Los archivos quedan de root (el panel sólo
+los lee). Uso (root, desde install.sh):
+    python3 -I panel/install_assets.py DESTINO [PROPIETARIO] < assets.tar
 """
 import importlib.util
 import json
@@ -36,7 +37,7 @@ def valid_catalog(payload):
         return False
     return isinstance(items, dict) and 0 < len(items) <= MAX_ITEMS and all(
         isinstance(k, str) and ITEM_ID.fullmatch(k) and isinstance(v, str) and 0 < len(v) <= 80
-        and all(ord(c) >= 32 and c != '\x7f' for c in v) for k, v in items.items())
+        and all(ord(c) >= 32 and c != '\x7f' and not 0xD800 <= ord(c) <= 0xDFFF for c in v) for k, v in items.items())
 
 
 def install(stream, destination, uid=None, gid=None):
@@ -69,6 +70,6 @@ def install(stream, destination, uid=None, gid=None):
 
 
 if __name__ == '__main__':
-    owner = pwd.getpwnam(sys.argv[2])
-    names = install(sys.stdin.buffer, Path(sys.argv[1]), owner.pw_uid, owner.pw_gid)
+    owner = pwd.getpwnam(sys.argv[2]) if len(sys.argv) > 2 else None
+    names = install(sys.stdin.buffer, Path(sys.argv[1]), owner and owner.pw_uid, owner and owner.pw_gid)
     print(f'{len(names)} texturas instaladas en {sys.argv[1]}')

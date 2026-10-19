@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import time
+import unicodedata
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,8 +89,10 @@ def height(value):
 
 def message_text(value):
     value = value.strip()
+    # Cf: caracteres de formato invisibles (bidi, ancho cero) que permitirían disfrazar el texto.
     if not 1 <= len(value) <= catalog.MESSAGE_LIMIT or '§' in value \
-            or any(ord(c) < 32 or 127 <= ord(c) < 160 or c in '  ' for c in value):
+            or any(ord(c) < 32 or 127 <= ord(c) < 160 or c in '\u2028\u2029'
+                   or unicodedata.category(c) in ('Cf', 'Cs') for c in value):
         raise ValueError(f'a message is 1 to {catalog.MESSAGE_LIMIT} printable characters on one line')
     return value
 
@@ -507,9 +510,13 @@ class Panel:
         if not entry or not isinstance(entry.get('pos'), list) or len(entry['pos']) < 3:
             return None
         dimension = entry.get('dimension') or 'overworld'
-        if dimension not in catalog.DIMENSIONS:
+        try:
+            position = [int(v) for v in entry['pos'][:3]]
+        except (TypeError, ValueError, OverflowError):
             return None
-        return dimension, [int(v) for v in entry['pos'][:3]]
+        if dimension not in catalog.DIMENSIONS or any(abs(v) > catalog.COORDINATE_LIMIT for v in position):
+            return None
+        return dimension, position
 
     def player_commands(self, action, player, params, known):
         """Comandos (tuplas de palabras ya validadas) de una acción, o un texto de error."""
@@ -600,10 +607,15 @@ class Panel:
         raise ValueError(f'unknown action {action}')
 
     def player_action(self, action, name, *params):
-        known = {p['name']: p for p in self.players()['players']}
-        player = known.get(name)
-        if not player:
+        players = self.players()['players']
+        known = {p['name']: p for p in players}
+        matches = [p for p in players if p['name'] == name]
+        if not matches:
             return {'ok': False, 'output': 'Unknown player.'}
+        if len(matches) > 1:
+            # Dos UUID con el mismo nombre (p. ej. una caché antigua): no se adivina a quién va la acción.
+            return {'ok': False, 'output': f'Several known players are called {name}; resolve it from the console.'}
+        player = matches[0]
         if action not in catalog.OFFLINE_OK and not player['online']:
             return {'ok': False, 'output': f'{name} is not online. This action needs them in the game.'}
         commands = self.player_commands(action, player, params, known)
@@ -975,7 +987,7 @@ def main(argv):
                 result = execute(Panel(), verb, args)
         else:
             result = execute(Panel(), verb, args)
-    except (Error, OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+    except (Error, OSError, ValueError, KeyError, ArithmeticError, subprocess.SubprocessError) as exc:
         result = {'ok': False, 'output': str(exc)}
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result.get('ok') else 1

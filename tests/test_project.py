@@ -352,6 +352,28 @@ class HostAndLifecycleTests(unittest.TestCase):
             self.assertEqual(runner.call_args.args[0], ['docker', 'update', '--restart', 'unless-stopped', 'abc'])
 
 
+class FreshInstallTests(unittest.TestCase):
+    def test_new_worlds_start_with_the_whitelist_enforced(self):
+        from mclan.runtime import initialize_data
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Mock(data=Path(directory) / 'data')
+            with patch('mclan.runtime.os.chown'):
+                initialize_data(fake, True)
+            properties = (fake.data / 'server.properties').read_text().splitlines()
+        self.assertIn('white-list=true', properties)
+        self.assertIn('enforce-whitelist=true', properties)
+        self.assertIn('online-mode=true', properties)
+
+    def test_install_can_start_with_optional_plugins_disabled(self):
+        args = cli.parser().parse_args(['install', '--accept-eula', '--disable-plugin', 'mclan_skins',
+                                        '--disable-plugin', 'bluemap'])
+        self.assertEqual(args.disable_plugin, ['mclan_skins', 'bluemap'])
+        with self.assertRaises(SystemExit), patch('sys.stderr'):
+            cli.parser().parse_args(['install', '--disable-plugin', 'geyser'])
+        self.assertIn("lock['disabled_plugins'] = sorted(set(args.disable_plugin))",
+                      (ROOT / 'scripts/mclan/cli.py').read_text())
+
+
 class PackagingTests(unittest.TestCase):
     def test_every_dockerfile_copy_is_allowed_by_dockerignore(self):
         allowed = {line[1:] for line in (ROOT / 'docker/.dockerignore').read_text().split() if line.startswith('!')}
@@ -790,7 +812,7 @@ class BackupTests(unittest.TestCase):
         self.assertEqual((self.root / '.env').read_text(), env_before)
         with self.assertRaises(Error): real.set_plugin('geyser', False)
 
-    def test_mclan_skins_can_be_disabled_and_a_failed_build_only_blocks_when_enabled(self):
+    def test_mclan_skins_can_be_disabled_and_a_disabled_addon_is_never_built(self):
         real = Runtime(self.root)
         if 'mclan_skins' in self.active:
             active = real.set_plugin('mclan_skins', False)
@@ -800,22 +822,47 @@ class BackupTests(unittest.TestCase):
         self.assertIn('disabled mclan_skins', (ROOT / 'docker/entrypoint.sh').read_text())
         release = self.root / 'releases/new'
         release.mkdir(parents=True)
-        entry = {'version': '1.2.0', 'source_sha256': 'f' * 64, 'build': 'local'}
-        with patch('mclan.runtime.addons.build', side_effect=Error('javac failed')):
-            lock = {'mclan_skins': dict(entry)}
-            with self.assertRaisesRegex(Error, 'plugin mclan_skins off'):
+        entry = {'version': '1.2.1', 'source_sha256': 'f' * 64, 'build': 'local'}
+        with patch('mclan.runtime.addons.build', side_effect=Error('javac failed')) as build, \
+             patch('mclan.runtime.pin_temurin', return_value='eclipse-temurin@sha256:' + '3' * 64) as pin:
+            lock = {'java': 25, 'mclan_skins': dict(entry)}
+            with self.assertRaisesRegex(Error, 'install.sh --disable-plugin mclan_skins.*plugin mclan_skins off'):
                 real.build_addons(lock, release, {})
-            lock = {'mclan_skins': dict(entry), 'disabled_plugins': ['mclan_skins']}
+            # Desactivado: ni JDK ni compilación; la release queda sin él.
+            build.reset_mock()
+            pin.reset_mock()
+            lock = {'java': 25, 'mclan_skins': dict(entry), 'disabled_plugins': ['mclan_skins']}
             real.build_addons(lock, release, {})
             self.assertNotIn('mclan_skins', lock)
-        # El mismo código ya compilado se reutiliza sin volver a compilar.
+            build.assert_not_called()
+            pin.assert_not_called()
+        # El mismo código ya compilado se reutiliza sin JDK ni compilación, también desactivado.
         (release / 'MclanSkins.jar').write_bytes(b'jar')
-        existing = {'mclan_skins': dict(entry, sha256=sha256(release / 'MclanSkins.jar'))}
-        with patch('mclan.runtime.addons.build') as build:
-            lock = {'mclan_skins': dict(entry)}
-            real.build_addons(lock, release, existing)
+        existing = {'mclan_skins': dict(entry, sha256=sha256(release / 'MclanSkins.jar')), 'jdk_base': 'jdk'}
+        with patch('mclan.runtime.addons.build') as build, patch('mclan.runtime.pin_temurin') as pin:
+            for disabled in ([], ['mclan_skins']):
+                lock = {'java': 25, 'mclan_skins': dict(entry), 'disabled_plugins': disabled}
+                real.build_addons(lock, release, existing)
+                self.assertEqual(lock['mclan_skins']['sha256'], existing['mclan_skins']['sha256'])
         build.assert_not_called()
-        self.assertEqual(lock['mclan_skins']['sha256'], existing['mclan_skins']['sha256'])
+        pin.assert_not_called()
+
+    def test_reenabling_an_addon_left_out_of_the_release_rebuilds_it_on_update(self):
+        real = Runtime(self.root)
+        without = {k: v for k, v in self.runtime.active().items() if k != 'mclan_skins'}
+        without['disabled_plugins'] = ['mclan_skins']
+        real.activate(without)
+        active = real.set_plugin('mclan_skins', True)  # permitido aunque la release no lo incluya
+        self.assertEqual(active['disabled_plugins'], [])
+        with self.assertRaises(Error):
+            real.set_plugin('geyser', True)  # no es un plugin opcional
+        self.runtime.validate.return_value = active
+        args = argparse.Namespace(minecraft_version=None, plan=False, timeout=10)
+        same = copy.deepcopy(self.active)  # misma release que la activa, pero con el addon
+        same['id'] = active['id']
+        with patch('mclan.cli.versions.resolve', return_value=same), patch('mclan.cli.confirm'):
+            cli.update(self.runtime, args, Mock())
+        self.runtime.stage.assert_called_once()
 
     def test_update_keeps_plugins_the_operator_disabled(self):
         args = argparse.Namespace(minecraft_version=None, plan=False, timeout=10)
@@ -831,7 +878,7 @@ class BackupTests(unittest.TestCase):
     def test_manage_plugin_command_stops_toggles_and_restarts(self):
         self.runtime.running.return_value = True
         args = argparse.Namespace(command='plugin', name='bluemap', state='off', timeout=10)
-        self.runtime.set_plugin = Mock()
+        self.runtime.set_plugin = Mock(return_value={'bluemap': {}})
         with patch('mclan.cli.run', return_value=Mock(stdout='unix:///var/run/docker.sock\n')), \
              patch('mclan.cli.settings', return_value={'contact': 'https://example.com'}):
             cli.manage(self.runtime, args)

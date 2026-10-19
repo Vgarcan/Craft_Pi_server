@@ -134,7 +134,7 @@ class App:
         if not isinstance(items, dict):
             return {}
         return {k: v for k, v in items.items() if isinstance(k, str) and re.fullmatch(r'[a-z0-9_]{1,64}', k)
-                and isinstance(v, str) and len(v) <= 80}
+                and isinstance(v, str) and len(v) <= 80 and not any(0xD800 <= ord(c) <= 0xDFFF for c in v)}
 
     # --- Infraestructura -----------------------------------------------------------------
     def helper(self, argv, timeout=60):
@@ -142,7 +142,8 @@ class App:
             result = subprocess.run([*self.helper_argv, *argv], capture_output=True, text=True,
                                     timeout=timeout, check=False, stdin=subprocess.DEVNULL)
             return json.loads(result.stdout.strip().splitlines()[-1])
-        except (subprocess.SubprocessError, json.JSONDecodeError, IndexError, OSError) as exc:
+        except (subprocess.SubprocessError, json.JSONDecodeError, IndexError, OSError, ValueError) as exc:
+            # ValueError cubre también NUL y textos que no se pueden codificar en los argumentos.
             return {'ok': False, 'output': f'The operation could not run ({type(exc).__name__}).'}
 
     def session(self, headers):

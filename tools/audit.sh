@@ -23,6 +23,16 @@ has() { grep -q -- "$1" <<<"$log"; }
 lacks() { ! has "$1"; }
 
 env_value() { sed -n "s/^$1=//p" .env; }
+# data/ es del usuario del contenedor: root lo lee sin seguir enlaces y con tope (mclan.safefs).
+data_file() {
+    python3 -I - "$PROJECT_DIR" "$1" 2>/dev/null <<'EOF'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1] + '/scripts')
+from mclan.safefs import read_data
+sys.stdout.write(read_data(Path(sys.argv[1]) / 'data', sys.argv[2], 256 * 1024).decode(errors='replace'))
+EOF
+}
 LAN_IP="$(env_value LAN_IP)"
 IMAGE="$(env_value RUNTIME_IMAGE)"
 CONTAINER=minecraft-lan-minecraft-1
@@ -77,7 +87,7 @@ fi
 section 'Plugins (arranque actual)'
 # Estado de un plugin en la release activa: absent, off (desactivado por el operador) u on.
 plugin_state() {
-    python3 -c 'import json, sys; a = json.load(open("state/active.json")); k = sys.argv[1]
+    python3 -I -c 'import json, sys; a = json.load(open("state/active.json")); k = sys.argv[1]
 print("absent" if k not in a else "off" if k in a.get("disabled_plugins", []) else "on")' "$1"
 }
 if [[ ${started:-} ]]; then
@@ -95,12 +105,15 @@ if [[ ${started:-} ]]; then
             'MclanSkins no puede modificar esta build de Geyser: Bedrock ve las skins de Geyser' lacks 'cannot be hooked'
     fi
 fi
-geyser_debug="$(sed -n 's/^debug-mode: *//p' data/plugins/Geyser-Spigot/config.yml 2>/dev/null || true)"
+geyser_debug="$(data_file plugins/Geyser-Spigot/config.yml | sed -n 's/^debug-mode: *//p' || true)"
 expect warn 'Geyser sin modo de depuración' 'Geyser en modo de depuración (debug-mode: true): llena el log' \
     test "$geyser_debug" != true
 
 section 'Mapa BlueMap'
-if python3 -c 'import json,sys; sys.exit(0 if "bluemap" in json.load(open("state/active.json")) else 1)'; then
+bluemap_state="$(plugin_state bluemap)"
+if [[ $bluemap_state == off ]]; then
+    ok 'BlueMap desactivado por el operador'
+elif [[ $bluemap_state == on ]]; then
     expect fail "Web del mapa en http://$LAN_IP:8100/" "La web de BlueMap no responde en $LAN_IP:8100" \
         python3 -c 'import sys, urllib.request; sys.exit(urllib.request.urlopen(sys.argv[1], timeout=5).status != 200)' "http://$LAN_IP:8100/"
     if [[ ${started:-} ]]; then
@@ -120,7 +133,9 @@ if [[ -f /etc/systemd/system/mclan-panel.service ]]; then
     expect fail "Panel sólo en https://$LAN_IP:8443/" 'El panel no escucha sólo en la IP LAN' panel_port_ok
     expect fail 'Regla sudo del panel limitada al helper' 'La regla sudo del panel no es la gestionada' \
         grep -qx "mclan-panel ALL=(root) NOPASSWD: /usr/bin/python3 -I $PROJECT_DIR/panel/helper.py \\*" /etc/sudoers.d/mclan-panel
-    if [[ -f /etc/mclan-panel/initial-password ]]; then warn 'El panel conserva la contraseña inicial: cámbiala en Cuenta'; fi
+    if [[ -f /etc/mclan-panel/data/initial-password || -f /etc/mclan-panel/initial-password ]]; then
+        warn 'El panel conserva la contraseña inicial: cámbiala en Account'
+    fi
     textures="$(find /etc/mclan-panel/assets -maxdepth 1 -name '*.png' 2>/dev/null | wc -l)"
     expect warn "Texturas del panel: $textures" 'Panel sin texturas: repite sudo panel/install.sh con el servidor en marcha' \
         test "$textures" -ge 100
@@ -135,10 +150,11 @@ expect fail 'Sin operaciones pendientes' 'Operación incompleta: state/operation
 attention="$(./manage.sh status 2>/dev/null | grep 'ATENCIÓN' || true)"
 if [[ -z $attention ]]; then ok 'manage.sh status sin avisos'
 else while read -r line; do warn "${line#ATENCIÓN: }"; done <<<"$attention"; fi
-whitelist="$(sed -n 's/^white-list=//p' data/server.properties)"
-entries="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' data/whitelist.json 2>/dev/null || echo 0)"
-if [[ $whitelist == true && $entries == 0 ]]; then warn 'Whitelist activa y vacía: nadie puede entrar'
-else ok "white-list=$whitelist, $entries jugador(es) en whitelist.json"; fi
+whitelist="$(data_file server.properties | sed -n 's/^white-list=//p' | tr -d '\r')"
+entries="$(data_file whitelist.json | python3 -I -c 'import json, sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"
+if [[ $whitelist != true ]]; then warn 'Whitelist desactivada: cualquier cuenta válida de la LAN puede entrar'
+elif [[ $entries == 0 ]]; then warn 'Whitelist activa y vacía: nadie puede entrar'
+else ok "Whitelist activa con $entries jugador(es)"; fi
 
 section 'Recursos'
 available=$(( $(sed -n 's/^MemAvailable: *\([0-9]*\).*/\1/p' /proc/meminfo) / 1024 ))

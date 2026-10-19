@@ -92,7 +92,7 @@ La opción recomendada evita transferir archivos desde tu ordenador:
 sudo apt-get install -y git
 sudo git clone https://github.com/Vgarcan/Craft_Pi_server.git /opt/minecraft-lan-installer
 cd /opt/minecraft-lan-installer
-sudo chmod +x install.sh manage.sh tests/run.sh docker/entrypoint.sh
+sudo chmod +x install.sh manage.sh tests/run.sh docker/entrypoint.sh panel/install.sh tools/audit.sh
 ```
 
 Es una instalación nueva: `/opt/minecraft-lan-installer` no debe existir. Si ya existe, revisa su estado y conserva un backup en lugar de clonarlo o descomprimirlo encima.
@@ -124,18 +124,6 @@ sha256sum -c --quiet MANIFEST.sha256 && echo 'Archivos íntegros'
 ```
 
 `MANIFEST.sha256` contiene el SHA-256 de cada archivo: si alguno no coincide, vuelve a descargar el ZIP.
-
-### Si ya descargaste el paquete original del proyecto
-
-El archivo `Minecraft-LAN-Server-Installer.zip` entregado inicialmente contiene la carpeta `minecraft-lan-installer/`, sin `-main`. Para ese archivo concreto:
-
-```bash
-sudo unzip ~/Minecraft-LAN-Server-Installer.zip -d /opt
-cd /opt/minecraft-lan-installer
-sudo chmod +x install.sh manage.sh tests/run.sh docker/entrypoint.sh
-```
-
-No mezcles los nombres de ambos ZIP. El código y la carpeta final son los mismos; cambia el nombre de la carpeta que genera cada descarga. Si eliges otra ubicación, utiliza siempre esa misma ruta en los comandos siguientes.
 
 ## 5. Comprobar e instalar el servidor
 
@@ -179,7 +167,7 @@ Crea el usuario sin privilegios `mclan-panel`, el certificado para la IP, la reg
 Anota la huella SHA-256 que imprime. Abre `https://IP_DE_LA_PI:8443/` desde otro equipo de tu red, comprueba que el navegador muestra esa misma huella y acepta el certificado autofirmado. La contraseña inicial está en:
 
 ```bash
-sudo cat /etc/mclan-panel/initial-password
+sudo cat /etc/mclan-panel/data/initial-password
 ```
 
 Cámbiala en **Account** nada más entrar.

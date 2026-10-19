@@ -1,5 +1,5 @@
 name: MclanSkins
-version: 1.2.0
+version: 1.2.1
 description: Bedrock players see complete original Bedrock skins (persona, animations); Java players see the default skin.
 main: dev.mclan.skins.MclanSkins
 api-version: '1.13'

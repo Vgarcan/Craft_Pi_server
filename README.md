@@ -131,6 +131,7 @@ sudo ./install.sh --accept-eula --lan-ip 192.168.1.50 --contact https://github.c
 
 - **Sustituye `192.168.1.50` por la IP real de la Pi** (`ip -4 addr`). Si sólo hay una candidata, puedes omitir `--lan-ip`.
 - `--contact`, una URL o un email, va en el `User-Agent` que exige la API de Paper.
+- `--disable-plugin mclan_skins` o `--disable-plugin bluemap` (se puede repetir) instala con ese plugin opcional desactivado. Sirve, por ejemplo, si MclanSkins no compilara con una versión nueva de Geyser.
 
 La instalación:
 1. Elige la versión de Minecraft que soporta Geyser y el build estable de Paper correspondiente.
@@ -149,18 +150,18 @@ sudo panel/install.sh
 
 Crea el usuario sin privilegios `mclan-panel`, un certificado autofirmado para la IP, la regla sudo limitada al helper y el servicio `mclan-panel`. También extrae del cliente de Minecraft las texturas y el catálogo de objetos.
 
-En una instalación nueva BlueMap descarga ese cliente unos minutos después del primer arranque: el script **espera hasta 10 minutos** (`MCLAN_ASSETS_WAIT=SEGUNDOS` para cambiarlo). Si aun así no está, el panel funciona con su estilo CSS y basta con repetir `sudo panel/install.sh` más tarde.
+En una instalación nueva BlueMap descarga ese cliente unos minutos después del primer arranque: el script **espera hasta 10 minutos** (para cambiarlo: `sudo MCLAN_ASSETS_WAIT=1200 panel/install.sh`). Si aun así no está, el panel funciona con su estilo CSS y basta con repetir `sudo panel/install.sh` más tarde.
 
 Al terminar imprime la dirección (`https://IP_DE_LA_PI:8443/`) y la **huella SHA-256 del certificado**. Compárala con la que muestre el navegador antes de aceptar el aviso de certificado autofirmado.
 
 ### 3.5 Primer acceso, whitelist y operador
 
 ```bash
-sudo cat /etc/mclan-panel/initial-password
+sudo cat /etc/mclan-panel/data/initial-password
 ```
 
 1. Entra en el panel con esa contraseña y cámbiala en **Account**. Si la olvidas: `sudo panel/install.sh --reset-password`.
-2. La whitelist está activa desde el principio: nadie puede entrar hasta que lo añadas. En **Players → Add a player**:
+2. La whitelist está activa desde el principio (`white-list=true` y `enforce-whitelist=true`): nadie puede entrar hasta que lo añadas. En instalaciones anteriores a la 0.8.2, actívala en **Players → Turn whitelist on**; `tools/audit.sh` avisa si está apagada. En **Players → Add a player**:
    - **Java:** el nombre de la cuenta.
    - **Bedrock:** el gamertag sin espacios, o su XUID.
    - **Bedrock con «Floodgate does not know»:** pide al jugador que intente entrar una vez y usa **Open 5 min and wait** en su intento rechazado. La whitelist se abre hasta que entra, lo añade y se vuelve a cerrar.
@@ -229,12 +230,12 @@ Los jugadores siguen usando la misma dirección y el puerto 19132. Sobre la conf
 
 ## 5. El panel web
 
-`https://IP_DE_LA_PI:8443/`, sólo en tu LAN. Está en inglés y se maneja como el juego: la barra de objetos de abajo es el menú (teclas 1–9 o la rueda del ratón sobre ella). Funciona sin JavaScript; con él, navega sin recargar y avisa de lo que pasa.
+`https://IP_DE_LA_PI:8443/`, sólo en tu LAN. Está en inglés y se maneja como el juego: la barra de objetos de abajo es el menú (teclas 1–9 o la rueda del ratón sobre ella). Funciona sin JavaScript, salvo la subida de mundos desde el navegador; con él, navega sin recargar y avisa de lo que pasa.
 
 | Página (tecla) | Qué permite |
 | --- | --- |
 | Dashboard (1) | Estado y salud, jugadores conectados, memoria y temperatura en vivo, direcciones para conectarse (clic para copiar), arrancar, parar, reiniciar, backup y versiones |
-| Players (2) | Jugadores conocidos y sus perfiles; whitelist (activar, añadir Java, Bedrock o XUID, quitar); intentos rechazados de las últimas 72 h con **Allow** y **Open 5 min and wait** |
+| Players (2) | Jugadores conocidos y sus perfiles; whitelist (activar, añadir Java, Bedrock o XUID, quitar); intentos rechazados de las últimas 72 h con **Allow** y **Open 5 min and wait**; apertura temporal para un jugador (Java o Bedrock, de 1 a 15 minutos) |
 | World (3) | Biblioteca de mundos, subir mundos, BlueMap (pausar, reanudar, desactivar), borde, progreso de Chunky y ajustes de `server.properties` |
 | Console (4) | Logs en vivo y comandos de juego con historial (↑↓), autocompletado (Tab) y atajos |
 | Backups (5) | Crear backup y ver las copias |
@@ -263,12 +264,12 @@ La tarjeta **Actions** agrupa las acciones en pestañas al estilo del inventario
 | --- | --- |
 | Items | Buscar cualquier objeto por su nombre en inglés y darlo (1–64). Kits: Starter, Miner, Builder, Explorer, Farmer y Warrior. Niveles de experiencia y vaciar inventario |
 | Effects | 14 efectos (visión nocturna, velocidad, salto, invisibilidad…) de 1, 5 o 15 minutos y nivel I o II; curar, alimentar y quitar efectos |
-| Teleport | Al spawn, a su cama, a su última muerte (con 30 s de protección para recuperar sus cosas; nunca al vacío), a otro jugador, traerlo, o a coordenadas (Y vacía = superficie) |
+| Teleport | Al spawn, a su cama, a su última muerte (con 30 s de protección para recuperar sus cosas; nunca al vacío), a otro jugador, traerlo, o a coordenadas (Y vacía = superficie, sólo en el Overworld) |
 | Fun | Fuegos artificiales, trueno (sólo sonido y chispas), mascota ya domesticada (lobo, gato o loro) y encantar el objeto de la mano hasta su nivel máximo |
 | Message | Chat (`[Server]` en dorado), título grande o texto sobre la barra, hasta 100 caracteres |
 | Admin | Operador, whitelist, ban y unban, modo de juego y kick |
 
-Con el jugador desconectado sólo funciona Admin. Cada acción muestra un aviso sin mover la página y queda registrada en la Pi.
+Con el jugador desconectado sólo funcionan operador, ban y unban, y quitarlo de la whitelist. Cada acción muestra un aviso sin mover la página y queda registrada en la Pi.
 
 ![Acciones: teletransporte, vitales y ubicación](docs/images/profile-teleport.png)
 
@@ -313,15 +314,21 @@ La interfaz usa una API JSON que también puedes llamar con tu sesión. Los POST
 | `GET /api/console?lines=200` · `POST /api/console` | Logs y un comando (`{"command": "time set day"}`) |
 | `POST /api/players/<uuid>/action` | Acción de jugador: `{"do": "give", "item": "diamond_sword", "count": 1}`. Acciones y campos en `panel/catalog.py` (`FIELDS`) |
 | `GET /api/items` | Catálogo de objetos `[id, nombre, icono]` |
-| `GET /api/jobs` · `GET /api/job/<id>` | Tareas en segundo plano y su resultado |
+| `GET /api/jobs` · `GET /api/job/<id>` · `POST /api/job/<id>/seen` | Tareas en segundo plano, su resultado y marcarlas como vistas |
+| `GET /api/upload-check?name=…&size=…` · `POST /upload` | Comprobar y subir un mundo (cuerpo binario, nombre en `X-Filename`) |
 
-Responde `{"ok": true, "message": ..., "output": ...}` o `{"ok": false, "error": ...}`.
+Respuestas:
+- **Acciones de jugador:** `{"ok": true, "message", "output"}` o `{"ok": false, "error"}`.
+- **`pulse` y `console`:** el resultado del helper (`{"ok", "output", …}`). `lines` admite 100, 200 o 500.
+- **`items` y `jobs`:** `{"items": […]}` y `{"jobs": […]}`.
+- **Sin sesión, o sin CSRF u `Origin`:** `{"error": …}` con 401 o 403.
 
 ### Seguridad del panel
 
 - **Proceso sin privilegios.** El servidor web corre como `mclan-panel` y no habla con Docker. Todo pasa por `panel/helper.py`, lo único que puede ejecutar con sudo, y que sólo acepta verbos fijos con valores validados por patrones y listas cerradas.
 - **Nada de texto libre a la consola**, con una excepción: el mensaje a un jugador. Es texto imprimible de hasta 100 caracteres, sin saltos de línea ni códigos de color, y viaja dentro de un componente de texto escapado con `json.dumps`, nunca como parte del comando. Autenticación, puertos y RCON no se pueden cambiar desde la web.
-- **Código de root.** `panel/install.sh` exige que el helper y todo el código que importa pertenezcan a root y no tengan escritura de grupo u otros.
+- **Código de root.** `panel/install.sh` exige que el helper, todo el código que importa y `addons/` pertenezcan a root y no tengan escritura de grupo u otros.
+- **Configuración de root.** `/etc/mclan-panel` es de root: el panel sólo lee el certificado, su clave y las texturas, y sólo escribe en `/etc/mclan-panel/data/` (`panel.json` al cambiar la contraseña). Root nunca abre nada de esa carpeta por su ruta (`panel/install_config.py`: descriptores de directorio, `O_NOFOLLOW` y temporales con `O_EXCL`), así que un panel comprometido no puede redirigir con un enlace lo que haga `sudo panel/install.sh`.
 - **Contraseña y sesión:**
   - contraseña con PBKDF2-SHA256 y bloqueo tras 5 fallos en 10 minutos;
   - cookie `__Host-` con `Secure`, `HttpOnly` y `SameSite=Strict`;
@@ -408,7 +415,8 @@ El addon propio **MclanSkins** (`addons/mclan-skins`) lo corrige:
 - **Compilación:** se compila en la Pi durante la instalación y cada `update`.
   - Lo hace en un contenedor JDK fijado por digest, sin red, contra los JAR exactos de la release.
   - Si Geyser cambia algo incompatible, `update` falla **antes** de parar el servidor y dice cómo seguir.
-- **Desactivarlo:** `sudo ./manage.sh plugin mclan_skins off`. Desactivado, una compilación fallida ya no bloquea las actualizaciones. `tools/audit.sh` avisa si el addon no puede engancharse a la build de Geyser.
+- **Desactivarlo:** `sudo ./manage.sh plugin mclan_skins off`, o `install.sh --disable-plugin mclan_skins` en la primera instalación. Desactivado, no se compila ni necesita el JDK, así que nunca bloquea una actualización. Al reactivarlo (`plugin mclan_skins on`), el siguiente `update` lo compila. `tools/audit.sh` avisa si el addon no puede engancharse a la build de Geyser.
+- **Límites:** el addon sólo reenvía skins razonables (hasta 512×512, 8 animaciones, 64 piezas, 16 tintes y 1 MiB de geometría). Si una skin se sale, ese jugador se ve con la skin que construye Geyser.
 
 ## 9. Administración desde la terminal
 
@@ -486,7 +494,7 @@ sudo tools/audit.sh
 
 Tras un `git pull` con código Docker o Compose nuevo, `start` y `restart` se niegan a arrancar hasta ejecutar `update`; `status`, `logs` y `stop` siguen disponibles.
 
-`compose.yaml` sólo se sustituye si es idéntico a una plantilla publicada (`PREVIOUS_TEMPLATES` en `scripts/mclan/runtime.py`). Si lo editaste a mano, `update` se detiene sin tocarlo.
+`compose.yaml` sólo se sustituye si es idéntico a una plantilla publicada (`PREVIOUS_TEMPLATES` en `scripts/mclan/runtime.py`). Si lo editaste a mano, todas las operaciones (`status`, `start`, `update`, `restore`…) se detienen sin tocarlo hasta que vuelva a coincidir con la plantilla.
 
 `manage.sh` no actualiza Raspberry Pi OS ni Docker Engine.
 
@@ -538,7 +546,7 @@ sudo ./manage.sh start
 | Skin Bedrock por defecto o aplanada | `tools/audit.sh`: MclanSkins debe estar habilitado y enganchado. Reconecta tras cambiar de skin |
 | Panel sin iconos ni buscador de objetos | Repite `sudo panel/install.sh` con el servidor en marcha y BlueMap activo |
 | El panel no carga | `sudo systemctl status mclan-panel` y `sudo journalctl -u mclan-panel -n 50`; usa `https://` y el puerto 8443 |
-| `update` falla al compilar MclanSkins | La build nueva de Geyser cambió algo interno. `sudo ./manage.sh plugin mclan_skins off` y repite `update` |
+| `install` o `update` falla al compilar MclanSkins | La build nueva de Geyser cambió algo interno. En la primera instalación repite con `--disable-plugin mclan_skins`; si ya está instalado, `sudo ./manage.sh plugin mclan_skins off` y repite `update` |
 | `start` pide ejecutar `update` | Hiciste `git pull` con código Docker o Compose nuevo ([§11](#11-actualizar)) |
 | Mapa negro | Usa Live map desde el panel; tras importar un Bedrock, `bluemap purge MAPA` |
 | Límite de memoria no efectivo | Activa el cgroup ([§3.1](#31-ajustes-recomendados-del-sistema)) y recrea el contenedor ([§12](#12-configuración-y-memoria)) |
