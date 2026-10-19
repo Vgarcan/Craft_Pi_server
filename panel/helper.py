@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 
 from mclan import cli, host  # noqa: E402
 from mclan.common import Error, LOG, run  # noqa: E402
-from mclan import nbt  # noqa: E402
+from mclan import nbt, snbt  # noqa: E402
 from mclan.safefs import open_folder, read_data, read_gzip_data, write_data  # noqa: E402
 from mclan.runtime import Runtime  # noqa: E402
 
@@ -85,6 +85,18 @@ def height(value):
     if not re.fullmatch(r'-?[0-9]{1,3}', value) or not low <= int(value) <= high:
         raise ValueError(f'height must be between {low} and {high}, or surface')
     return str(int(value))
+
+
+def item_name(value):
+    if len(value.strip()) > catalog.NAME_LIMIT:
+        raise ValueError(f'an item name is at most {catalog.NAME_LIMIT} characters')
+    return message_text(value)
+
+
+def effect_id(value):
+    if not re.fullmatch(r'[a-z_]{1,40}', value):
+        raise ValueError('an effect id is lowercase letters and _')
+    return value
 
 
 def message_text(value):
@@ -281,6 +293,14 @@ PLAYER_ACTIONS = {
     'enchant': (choice(*catalog.ENCHANTMENTS), integer(1, 5)),
     'pet': (choice(*catalog.PETS),),
     'message': (choice(*catalog.MESSAGE_KINDS), message_text),
+    # Editor de casillas («modo dios»): cualquier encantamiento hasta nivel 255 en cualquier objeto.
+    'slot-enchant': (choice(*catalog.SLOTS), choice(*catalog.ENCHANTMENTS), integer(1, catalog.GOD_LEVEL)),
+    **{action: (choice(*catalog.SLOTS),) for action in ('slot-unenchant', 'slot-repair', 'slot-unbreakable',
+                                                         'slot-clear', 'slot-duplicate')},
+    'slot-rename': (choice(*catalog.SLOTS), item_name),
+    'slot-count': (choice(*catalog.SLOTS), integer(1, catalog.STACK_LIMIT)),
+    'slot-set': (choice(*catalog.SLOTS), item_id, integer(1, catalog.STACK_LIMIT)),
+    'effect-remove': (effect_id,),
 }
 assert set(PLAYER_ACTIONS) == set(catalog.ACTIONS)
 FIREWORK_COLORS = ((16711680, 16766720), (65280, 65535), (16711935, 16777215))
@@ -299,12 +319,83 @@ def top(mapping, limit=8):
             for key, value in sorted(mapping.items(), key=lambda item: -item[1])[:limit] if isinstance(value, int)]
 
 
-def items(entries):
+def plain_text(component, limit=80):
+    """Texto plano de un componente de texto (nombre de un objeto): compuesto, lista o JSON en texto."""
+    if isinstance(component, str):
+        if component[:1] in '{["':
+            try:
+                return plain_text(json.loads(component), limit)
+            except ValueError:
+                pass
+        return component[:limit]
+    if isinstance(component, list):
+        return ''.join(plain_text(part, limit) for part in component[:32])[:limit]
+    if isinstance(component, dict):
+        return (plain_text(component.get('text', ''), limit) + plain_text(component.get('extra', []), limit))[:limit]
+    return ''
+
+
+def enchantment_levels(component):
+    """{"minecraft:sharpness": 5} (26.x) o {"levels": {...}} (1.20.5–1.21.4) → [[id, nivel], ...]."""
+    levels = component.get('levels', component) if isinstance(component, dict) else {}
+    return [[str(key).split(':', 1)[-1], int(value)] for key, value in list(levels.items())[:64]
+            if isinstance(value, int) and re.fullmatch(r'[a-z0-9_:.-]{1,64}', str(key))]
+
+
+def item_details(entry, slot):
+    """Objeto de un inventario: id, cantidad y lo que muestra el juego (encantamientos, desgaste, nombre)."""
+    item_id = entry['id'].split(':', 1)[-1]
+    components = entry.get('components') if isinstance(entry.get('components'), dict) else {}
+    count = entry.get('count', entry.get('Count', 1))
+    damage = components.get('minecraft:damage')
+    maximum = components.get('minecraft:max_damage') or catalog.MAX_DURABILITY.get(item_id)
+    potion = components.get('minecraft:potion_contents')
+    potion = potion.get('potion') if isinstance(potion, dict) else potion
+    return {'slot': slot, 'id': item_id, 'count': count if isinstance(count, int) else 1,
+            'enchantments': enchantment_levels(components.get('minecraft:enchantments')),
+            'stored_enchantments': enchantment_levels(components.get('minecraft:stored_enchantments')),
+            'damage': damage if isinstance(damage, int) else 0,
+            'max_damage': maximum if isinstance(maximum, int) and maximum > 0 else None,
+            'unbreakable': 'minecraft:unbreakable' in components,
+            'name': plain_text(components.get('minecraft:custom_name')) or None,
+            'potion': str(potion).split(':', 1)[-1][:40] if isinstance(potion, str) else None}
+
+
+def inventory_slot(number):
+    """Slot del .dat → nombre de /item: 0-8 barra, 9-35 inventario, 100-103 armadura y -106 mano secundaria
+    (formato anterior a 1.21.5; en 26.x la armadura va en «equipment»)."""
+    if not isinstance(number, int):
+        return None
+    if 0 <= number <= 8:
+        return f'hotbar.{number}'
+    if 9 <= number <= 35:
+        return f'inventory.{number - 9}'
+    return {100: 'armor.feet', 101: 'armor.legs', 102: 'armor.chest', 103: 'armor.head', -106: 'weapon.offhand'}.get(number)
+
+
+def items(entries, slot_name=inventory_slot):
     result = []
-    for entry in entries if isinstance(entries, list) else []:
+    for entry in entries[:200] if isinstance(entries, list) else []:
+        if isinstance(entry, dict) and isinstance(entry.get('id'), str) and (slot := slot_name(entry.get('Slot'))):
+            result.append(item_details(entry, slot))
+    return result
+
+
+def equipment_items(equipment):
+    names = {**{key: slot for key, (slot, _) in catalog.ARMOR_SLOTS.items()}, 'offhand': 'weapon.offhand'}
+    return [item_details(value, names[key]) for key, value in (equipment or {}).items()
+            if key in names and isinstance(value, dict) and isinstance(value.get('id'), str)]
+
+
+def active_effects(entries):
+    """Efectos activos: id, nivel (1 = I) y segundos restantes (-1: infinito)."""
+    result = []
+    for entry in entries[:64] if isinstance(entries, list) else []:
         if isinstance(entry, dict) and isinstance(entry.get('id'), str):
-            result.append({'slot': entry.get('Slot'), 'id': entry['id'].split(':', 1)[-1],
-                           'count': entry.get('count', entry.get('Count', 1))})
+            ticks, amplifier = entry.get('duration', 0), entry.get('amplifier', 0)
+            result.append({'id': entry['id'].split(':', 1)[-1][:40],
+                           'level': amplifier + 1 if isinstance(amplifier, int) else 1,
+                           'seconds': -1 if ticks == -1 else max(0, ticks // 20) if isinstance(ticks, int) else 0})
     return result
 
 
@@ -330,9 +421,9 @@ def profile_from(data, stats, advancements):
                      if isinstance(death, dict) else None,
                      'respawn': {'dimension': str(respawn.get('dimension', '')).split(':', 1)[-1], 'pos': respawn.get('pos')}
                      if respawn else None},
-        'inventory': items(data.get('Inventory')), 'ender_chest': items(data.get('EnderItems')),
-        'equipment': {slot: items([dict(value, Slot=slot)])[0] for slot, value in equipment.items()
-                      if isinstance(value, dict) and items([value])},
+        'inventory': items(data.get('Inventory')) + equipment_items(equipment),
+        'ender_chest': items(data.get('EnderItems'), lambda n: f'enderchest.{n}' if isinstance(n, int) and 0 <= n <= 26 else None),
+        'effects': active_effects(data.get('active_effects') or data.get('ActiveEffects')),
         'selected_slot': data.get('SelectedItemSlot'),
         'stats': {'custom': {key: custom[f'minecraft:{key}'] for key in HEADLINE_STATS if f'minecraft:{key}' in custom},
                   'mined': top(stats.get('minecraft:mined', {})), 'crafted': top(stats.get('minecraft:crafted', {})),
@@ -483,22 +574,27 @@ class Panel:
         profile = profile_from(data, stats if isinstance(stats, dict) else {}, advancements if isinstance(advancements, dict) else {})
         bans = [e for e in self.json_data('banned-players.json', default=[]) or [] if isinstance(e, dict) and e.get('uuid') == uuid_text]
         ops = [e for e in self.json_data('ops.json', default=[]) or [] if isinstance(e, dict) and e.get('uuid') == uuid_text]
+        profile['live'] = False
         if summary['online']:
-            # Posición y vida en vivo: el .dat sólo se guarda en el autosave.
-            for key, path in (('pos', 'Pos'), ('health', 'Health'), ('food', 'foodLevel')):
-                try:
-                    reply = self.rcon('data', 'get', 'entity', summary['name'], path)
-                except Error:
-                    continue
-                numbers = [float(n) for n in re.findall(r'-?\d+(?:\.\d+)?(?=[dfs]?\b)', reply.split('data:', 1)[-1])]
-                if key == 'pos' and len(numbers) >= 3:
-                    profile['location']['pos'] = numbers[:3]
-                elif key != 'pos' and numbers:
-                    profile['vitals'][key] = numbers[0]
+            # En vivo: el .dat sólo se guarda en el autosave. Una consulta trae todo el jugador; las fechas
+            # (bukkit/Paper) sólo están en el archivo y se conservan.
+            live = self.live_entity(summary['name'])
+            if live:
+                current = profile_from(live, {}, {})
+                for key in ('vitals', 'location', 'inventory', 'ender_chest', 'effects', 'selected_slot'):
+                    profile[key] = current[key]
+                profile['live'] = True
         return {'ok': True, **summary, **profile, 'name': summary['name'],
                 'xuid': int(uuid_text.replace('-', ''), 16) if is_bedrock(uuid_text) else None,
                 'ban': {k: bans[0].get(k) for k in ('reason', 'created', 'source', 'expires')} if bans else None,
                 'op_level': ops[0].get('level') if ops else None}
+
+    def live_entity(self, name):
+        """Datos del jugador conectado (SNBT de «data get entity»), o None si no se pueden leer."""
+        try:
+            return snbt.entity_data(self.rcon('data', 'get', 'entity', name))
+        except (Error, ValueError):
+            return None
 
     def stored_location(self, uuid_text, which):
         """Punto de reaparición o última muerte guardados en el .dat del jugador (o None)."""
@@ -597,6 +693,10 @@ class Panel:
                              for shift in (96, 64, 32, 0))
             return [('execute', 'at', name, 'run', 'summon', f'minecraft:{params[0]}', '~', '~', '~',
                      f'{{Owner:[I;{owner}],PersistenceRequired:1b}}')]
+        if action.startswith('slot-'):
+            return self.slot_commands(action, name, params)
+        if action == 'effect-remove':
+            return [('effect', 'clear', name, f'minecraft:{params[0]}')]
         if action == 'message':
             kind, text = params
             if kind == 'chat':
@@ -605,6 +705,43 @@ class Panel:
             component = {'text': text, 'color': 'gold' if kind == 'title' else 'white'}
             return [('title', name, kind, json.dumps(component, ensure_ascii=False))]
         raise ValueError(f'unknown action {action}')
+
+    def slot_commands(self, action, name, params):
+        """Editor de casillas: /item modify con modificadores en JSON escapado, /item replace."""
+        slot = params[0]
+        def modify(modifier):
+            return [('item', 'modify', 'entity', name, slot, json.dumps(modifier, ensure_ascii=False))]
+        if action == 'slot-enchant':
+            return modify({'function': 'minecraft:set_enchantments', 'add': False,
+                           'enchantments': {f'minecraft:{params[1]}': int(params[2])}})
+        if action == 'slot-unenchant':
+            return modify({'function': 'minecraft:set_components',
+                           'components': {'!minecraft:enchantments': {}, '!minecraft:stored_enchantments': {}}})
+        if action == 'slot-repair':
+            return modify({'function': 'minecraft:set_damage', 'damage': 1.0})
+        if action == 'slot-unbreakable':
+            return modify({'function': 'minecraft:set_components', 'components': {'minecraft:unbreakable': {}}})
+        if action == 'slot-rename':
+            return modify({'function': 'minecraft:set_name', 'target': 'custom_name', 'name': {'text': params[1]}})
+        if action == 'slot-count':
+            return modify({'function': 'minecraft:set_count', 'count': int(params[1])})
+        if action == 'slot-clear':
+            return [('item', 'replace', 'entity', name, slot, 'with', 'minecraft:air')]
+        if action == 'slot-set':
+            return [('item', 'replace', 'entity', name, slot, 'with', f'minecraft:{params[1]}', params[2])]
+        # slot-duplicate: a la primera casilla libre del mismo contenedor (inventario o cofre de ender).
+        live = self.live_entity(name)
+        if live is None:
+            return 'Could not read their inventory.'
+        ender = slot.startswith('enderchest.')
+        taken = {item['slot'] for item in (profile_from(live, {}, {})['ender_chest' if ender else 'inventory'])}
+        if slot not in taken:
+            return 'That slot is empty.'
+        free = [s for s in catalog.SLOTS if (s.startswith('enderchest.') if ender else s.split('.')[0] in ('hotbar', 'inventory'))
+                and s not in taken]
+        if not free:
+            return 'There is no free slot to copy it to.'
+        return [('item', 'replace', 'entity', name, free[0], 'from', 'entity', name, slot)]
 
     def player_action(self, action, name, *params):
         players = self.players()['players']

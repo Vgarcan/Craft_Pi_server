@@ -238,12 +238,98 @@ class HelperValidationTests(unittest.TestCase):
         profile = helper.profile_from(data, stats, advancements)
         self.assertEqual(profile['vitals']['gamemode'], 'creative')
         self.assertEqual(profile['location']['dimension'], 'the_nether')
-        self.assertEqual(profile['inventory'], [{'slot': 0, 'id': 'torch', 'count': 64}])
+        self.assertEqual([(i['slot'], i['id'], i['count']) for i in profile['inventory']], [('hotbar.0', 'torch', 64)])
         self.assertEqual(profile['stats']['mined'][0], {'id': 'dirt', 'count': 50})
         self.assertEqual(profile['stats']['custom'], {'play_time': 72000, 'deaths': 2})
         self.assertEqual(profile['advancements'], ['story/root'])
         self.assertEqual(profile['vitals']['abilities'], {'flying': True, 'mayfly': True})
         self.assertEqual(profile['last_played'], 5)
+
+    def test_items_carry_what_the_game_shows(self):
+        sword = {'Slot': 9, 'id': 'minecraft:diamond_sword', 'count': 1, 'components': {
+            'minecraft:enchantments': {'minecraft:sharpness': 5, 'minecraft:looting': 3}, 'minecraft:damage': 400,
+            'minecraft:custom_name': {'text': 'Bob', 'extra': [{'text': "'s <b>"}]}}}
+        old_format = {'Slot': -106, 'id': 'minecraft:shield', 'count': 1,
+                      'components': {'minecraft:enchantments': {'levels': {'minecraft:unbreaking': 3}},
+                                     'minecraft:custom_name': '{"text":"Wall"}', 'minecraft:unbreakable': {}}}
+        book = {'Slot': 0, 'id': 'minecraft:enchanted_book', 'count': 1,
+                'components': {'minecraft:stored_enchantments': {'minecraft:mending': 1}}}
+        potion = {'Slot': 35, 'id': 'minecraft:potion', 'count': 2,
+                  'components': {'minecraft:potion_contents': {'potion': 'minecraft:swiftness'}}}
+        data = {'Inventory': [sword, old_format, potion, {'Slot': 77, 'id': 'minecraft:dirt'}],
+                'EnderItems': [book, {'Slot': 30, 'id': 'minecraft:dirt'}],
+                'equipment': {'head': {'id': 'minecraft:iron_helmet', 'count': 1, 'components': {'minecraft:damage': 10}},
+                              'mainhand': {'id': 'minecraft:stick'}},
+                'active_effects': [{'id': 'minecraft:speed', 'amplifier': 1, 'duration': 1210},
+                                   {'id': 'minecraft:night_vision', 'amplifier': 'x', 'duration': -1}]}
+        profile = helper.profile_from(data, {}, {})
+        items = {i['slot']: i for i in profile['inventory']}
+        self.assertEqual(sorted(items), ['armor.head', 'inventory.0', 'inventory.26', 'weapon.offhand'])
+        self.assertEqual(items['inventory.0']['enchantments'], [['sharpness', 5], ['looting', 3]])
+        self.assertEqual((items['inventory.0']['damage'], items['inventory.0']['max_damage']), (400, 1561))
+        self.assertEqual(items['inventory.0']['name'], "Bob's <b>")
+        self.assertEqual((items['weapon.offhand']['enchantments'], items['weapon.offhand']['name']), ([['unbreaking', 3]], 'Wall'))
+        self.assertTrue(items['weapon.offhand']['unbreakable'])
+        self.assertEqual((items['inventory.26']['potion'], items['inventory.26']['count']), ('swiftness', 2))
+        self.assertEqual(items['armor.head']['max_damage'], 165)
+        self.assertEqual(profile['ender_chest'][0]['slot'], 'enderchest.0')
+        self.assertEqual(profile['ender_chest'][0]['stored_enchantments'], [['mending', 1]])
+        self.assertEqual(len(profile['ender_chest']), 1)
+        self.assertEqual(profile['effects'], [{'id': 'speed', 'level': 2, 'seconds': 60},
+                                              {'id': 'night_vision', 'level': 1, 'seconds': -1}])
+
+    def test_live_profile_reads_the_whole_player_once(self):
+        panel = helper.Panel.__new__(helper.Panel)
+        panel.runtime = Mock(data=Path('/nonexistent'))
+        panel.players = Mock(return_value={'players': [{'uuid': '11111111-2222-3333-4444-555555555555', 'name': 'Steve',
+                                                         'edition': 'java', 'online': True, 'op': False, 'banned': False,
+                                                         'whitelisted': True, 'last_played': 1}]})
+        panel.json_data = Mock(return_value=[])
+        panel.rcon = Mock(return_value='Steve has the following entity data: {Health: 7.0f, foodLevel: 3, '
+                          'Pos: [1.0d, 2.0d, 3.0d], SelectedItemSlot: 2, Inventory: [{Slot: 2b, id: "minecraft:bow", count: 1}]}')
+        with patch.object(helper, 'read_data', side_effect=FileNotFoundError):
+            profile = panel.player('11111111-2222-3333-4444-555555555555')
+        self.assertTrue(profile['live'])
+        self.assertEqual((profile['vitals']['health'], profile['location']['pos'], profile['selected_slot']), (7.0, [1.0, 2.0, 3.0], 2))
+        self.assertEqual(profile['inventory'][0]['slot'], 'hotbar.2')
+        self.assertEqual(panel.rcon.call_args_list[-1].args, ('data', 'get', 'entity', 'Steve'))
+        panel.rcon.return_value = 'No entity was found'
+        with patch.object(helper, 'read_data', side_effect=FileNotFoundError):
+            self.assertFalse(panel.player('11111111-2222-3333-4444-555555555555')['live'])
+
+    def test_slot_editor_actions(self):
+        ok = (('slot-enchant', 'Steve', 'hotbar.0', 'sharpness', '255'), ('slot-enchant', 'Steve', 'armor.feet', 'mending', '1'),
+              ('slot-rename', 'Steve', 'enderchest.26', 'Bob "the" blade'), ('slot-count', 'Steve', 'inventory.26', '99'),
+              ('slot-set', 'Steve', 'weapon.offhand', 'totem_of_undying', '1'), ('slot-clear', 'Steve', 'armor.head'),
+              ('effect-remove', 'Steve', 'speed'))
+        for argv in ok:
+            with self.subTest(argv=argv):
+                helper.parse(['player-action', *argv])
+        bad = (('slot-enchant', 'Steve', 'hotbar.9', 'sharpness', '1'), ('slot-enchant', 'Steve', 'hotbar.0', 'sharpness', '256'),
+               ('slot-enchant', 'Steve', 'hotbar.0', 'flight', '1'), ('slot-rename', 'Steve', 'hotbar.0', 'x' * 51),
+               ('slot-rename', 'Steve', 'hotbar.0', 'a\nb'), ('slot-count', 'Steve', 'hotbar.0', '100'),
+               ('slot-set', 'Steve', 'inventory.27', 'dirt', '1'), ('slot-clear', 'Steve', 'container.0'),
+               ('effect-remove', 'Steve', 'minecraft:speed'), ('slot-clear', 'Steve', 'hotbar.0 @a'))
+        for argv in bad:
+            with self.subTest(argv=argv), self.assertRaises(ValueError):
+                helper.parse(['player-action', *argv])
+        panel = helper.Panel.__new__(helper.Panel)
+        steve = {'name': 'Steve', 'uuid': 'x', 'online': True}
+        run = lambda action, *params: panel.player_commands(action, steve, list(params), {'Steve': steve})
+        words = run('slot-enchant', 'hotbar.0', 'sharpness', '255')[0]
+        self.assertEqual(words[:5], ('item', 'modify', 'entity', 'Steve', 'hotbar.0'))
+        self.assertEqual(json.loads(words[5])['enchantments'], {'minecraft:sharpness': 255})
+        self.assertEqual(json.loads(run('slot-rename', 'hotbar.1', 'Bob "the" \\ blade')[0][5])['name']['text'], 'Bob "the" \\ blade')
+        self.assertEqual(json.loads(run('slot-repair', 'hotbar.1')[0][5]), {'function': 'minecraft:set_damage', 'damage': 1.0})
+        self.assertEqual(run('slot-clear', 'armor.head')[0], ('item', 'replace', 'entity', 'Steve', 'armor.head', 'with', 'minecraft:air'))
+        self.assertEqual(run('slot-set', 'hotbar.3', 'bow', '1')[0][-2:], ('minecraft:bow', '1'))
+        self.assertEqual(run('effect-remove', 'speed')[0], ('effect', 'clear', 'Steve', 'minecraft:speed'))
+        panel.live_entity = Mock(return_value={'Inventory': [{'Slot': i, 'id': 'minecraft:dirt'} for i in range(4)]})
+        self.assertEqual(run('slot-duplicate', 'hotbar.1')[0], ('item', 'replace', 'entity', 'Steve', 'hotbar.4', 'from',
+                                                                'entity', 'Steve', 'hotbar.1'))
+        self.assertEqual(run('slot-duplicate', 'hotbar.8'), 'That slot is empty.')
+        panel.live_entity = Mock(return_value={'Inventory': [{'Slot': i, 'id': 'minecraft:dirt'} for i in range(36)]})
+        self.assertIn('no free slot', run('slot-duplicate', 'hotbar.1'))
 
     def test_player_verbs_are_validated(self):
         self.assertEqual(helper.parse(['player-action', 'gamemode', '.Alguien', 'creative'])[1], ['gamemode', '.Alguien', 'creative'])
@@ -892,6 +978,41 @@ class PanelAppTests(unittest.TestCase):
         self.assertEqual(json.loads(payload), {'ok': False, 'error': 'No player was found'})
         items = json.loads(self.request('GET', '/api/items', cookie=cookie)[2])['items']
         self.assertEqual(items[0][:2], ['diamond_sword', 'Diamond Sword'])
+
+    def test_inventory_and_slot_editor_pages(self):
+        cookie, csrf = self.login()
+        uuid = '00000000-0000-0000-0009-01f1b0392c35'
+        player = {'uuid': uuid, 'name': '.Alguien', 'edition': 'bedrock', 'online': True, 'op': False, 'banned': False,
+                  'whitelisted': True, 'last_played': None}
+        sword = {'slot': 'hotbar.0', 'id': 'diamond_sword', 'count': 1, 'enchantments': [['sharpness', 7]],
+                 'stored_enchantments': [], 'damage': 1200, 'max_damage': 1561, 'unbreakable': False,
+                 'name': '<script>x</script>', 'potion': None}
+        profile = dict(player, ok=True, xuid=1, ban=None, op_level=None, first_played=None, live=True, selected_slot=0,
+                       vitals={'health': 20.0, 'food': 20, 'gamemode': 'survival', 'abilities': {}},
+                       location={'dimension': 'overworld', 'pos': [1.0, 64.0, 2.0], 'death': None, 'respawn': None},
+                       inventory=[sword], ender_chest=[], effects=[{'id': 'speed', 'level': 2, 'seconds': 75}],
+                       stats={'custom': {}}, advancements=[])
+        calls = []
+        def fake(argv, timeout=60):
+            calls.append(argv)
+            return {'players': {'ok': True, 'players': [player]}, 'player': profile, 'status': status()}.get(argv[0], {'ok': True})
+        self.app.helper = fake
+        self.app.items = {'totem_of_undying': 'Totem of Undying'}
+        page = self.request('GET', f'/players/{uuid}', cookie=cookie)[2]
+        for marker in (b'mc-window', b'Ender chest', b'inv-slot enchanted selected', b'Sharpness VII', b'Durability: 361 / 1561',
+                       b'dur-low', b'Speed II', b'1:15', b'?slot=hotbar.0#slot-editor', b'sprite-helmet', b'>Live<'):
+            self.assertIn(marker, page)
+        self.assertNotIn(b'<script>x', page)
+        self.assertNotIn(b'id="slot-editor"', page)
+        editor = self.request('GET', f'/players/{uuid}?slot=hotbar.0', cookie=cookie)[2]
+        self.assertIn(b'id="slot-editor"', editor)
+        for marker in (b'Hotbar slot 1', b'name="enchantment"', b'max="255"', b'value="slot-repair"', b'value="slot-duplicate"'):
+            self.assertIn(marker, editor)
+        empty = self.request('GET', f'/players/{uuid}?slot=enderchest.5', cookie=cookie)[2]
+        self.assertIn(b'Put an item here', empty)
+        self.assertNotIn(b'id="slot-editor"', self.request('GET', f'/players/{uuid}?slot=../../x', cookie=cookie)[2])
+        self.request('POST', f'/players/{uuid}', f'csrf={csrf}&do=slot-set&slot=enderchest.5&item=Totem+of+Undying&count=', cookie)
+        self.assertEqual(calls[-1], ['player-action', 'slot-set', '.Alguien', 'enderchest.5', 'totem_of_undying', '1'])
 
     def test_offline_profile_only_enables_admin_actions(self):
         cookie, _ = self.login()

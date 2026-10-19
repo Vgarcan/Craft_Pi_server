@@ -27,6 +27,9 @@ ASSETS = {
     'button.png': 'gui/sprites/widget/button.png',
     'button_highlighted.png': 'gui/sprites/widget/button_highlighted.png',
     'button_disabled.png': 'gui/sprites/widget/button_disabled.png',
+    # Siluetas de las casillas vacías del inventario (armadura y mano secundaria).
+    **{f'slot_{name}.png': f'gui/sprites/container/slot/{name}.png'
+       for name in ('helmet', 'chestplate', 'leggings', 'boots', 'shield')},
     **{f'{name}.png': f'block/{name}.png' for name in (
         'grass_block_side', 'grass_block_top', 'dirt', 'stone', 'deepslate', 'deepslate_top', 'cobblestone',
         'oak_planks', 'obsidian', 'bedrock', 'command_block_front', 'bookshelf', 'crafting_table_front',

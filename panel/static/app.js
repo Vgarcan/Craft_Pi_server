@@ -423,6 +423,8 @@
       if (reply.ok) {
         toast('ok', reply.message, reply.output || '');
         if (fields.do === 'message') form.reset();
+        const dialog = form.closest('dialog.slot-dialog');
+        if (dialog) setTimeout(() => openSlotEditor(dialog.dataset.href), 500);
         setTimeout(refreshProfile, 700);
       } else {
         toast('bad', 'Could not do that', reply.error || `HTTP ${response.status}`);
@@ -438,16 +440,11 @@
     if (!catalog) catalog = getJSON('/api/items').then((data) => data.items || []).catch(() => { catalog = null; return []; });
     return catalog;
   }
-  function initPlayer(root) {
-    const tabs = $('[data-tabs]', root);
-    if (!tabs) return;
-    const saved = store.get('pa-tab', '');
-    const radio = saved && $(`#${CSS.escape(saved)}`, tabs);
-    if (radio && !$('.alert.warn', tabs.parentElement)) radio.checked = true;
-    tabs.addEventListener('change', (event) => { if (event.target.name === 'pa-tab') store.set('pa-tab', event.target.id); });
-
-    const search = $('[data-item-search]', root);
-    const results = $('[data-item-results]', root);
+  // Buscador de objetos: cada campo [data-item-search] con sus [data-item-results] del mismo formulario.
+  function bindItemSearch(search) {
+    const results = $('[data-item-results]', search.form);
+    if (!results || search.dataset.bound) return;
+    search.dataset.bound = '1';
     const choose = (id) => {
       search.value = id;
       $$('.item-result', results).forEach((b) => b.classList.toggle('selected', b.dataset.item === id));
@@ -486,18 +483,69 @@
         empty.textContent = 'No item matches that name.';
         results.replaceChildren(empty);
       }
+      if (found.some(([id]) => id === search.value)) choose(search.value);
     };
-    if (search && results) {
-      search.addEventListener('focus', items, { once: true });
-      search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(render, 120); });
-      results.addEventListener('click', (event) => {
-        const button = event.target.closest('.item-result');
-        if (button) choose(button.dataset.item);
+    search.addEventListener('focus', items, { once: true });
+    search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(render, 120); });
+    results.addEventListener('click', (event) => {
+      const button = event.target.closest('.item-result');
+      if (button) choose(button.dataset.item);
+    });
+  }
+
+  // Editor de casillas: la página con ?slot=… trae la tarjeta #slot-editor; con JS se abre en una ventana.
+  function slotDialog() {
+    let dialog = $('dialog.slot-dialog');
+    if (!dialog) {
+      dialog = document.createElement('dialog');
+      dialog.className = 'mc-dialog slot-dialog';
+      dialog.addEventListener('click', (event) => {
+        if (event.target === dialog || event.target.closest('[data-slot-close]')) { event.preventDefault(); dialog.close(); }
       });
-      $$('.item-pick', root).forEach((b) => b.addEventListener('click', () => { search.value = b.dataset.item; render().then(() => choose(b.dataset.item)); }));
-      const count = $('input[name="count"]', search.form);
-      $$('[data-count]', root).forEach((b) => b.addEventListener('click', () => { count.value = b.dataset.count; }));
+      document.body.append(dialog);
     }
+    return dialog;
+  }
+  async function openSlotEditor(href) {
+    try {
+      const response = await fetch(href, { credentials: 'same-origin', headers: { 'X-Requested-With': 'fetch' } });
+      const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+      const editor = $('#slot-editor', doc);
+      if (!editor) { location.href = href; return; }
+      editor.removeAttribute('id');
+      const dialog = slotDialog();
+      dialog.dataset.href = href;
+      dialog.replaceChildren(editor);
+      $$('[data-item-search]', dialog).forEach(bindItemSearch);
+      if (!dialog.open) dialog.showModal();
+    } catch {
+      location.href = href;
+    }
+  }
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest('a[data-slot-link]');
+    if (!link || event.metaKey || event.ctrlKey || event.shiftKey || event.button) return;
+    event.preventDefault();
+    openSlotEditor(link.href);
+  });
+
+  function initPlayer(root) {
+    const tabs = $('[data-tabs]', root);
+    if (!tabs) return;
+    const saved = store.get('pa-tab', '');
+    const radio = saved && $(`#${CSS.escape(saved)}`, tabs);
+    if (radio && !$('.alert.warn', tabs.parentElement)) radio.checked = true;
+    tabs.addEventListener('change', (event) => { if (event.target.name === 'pa-tab') store.set('pa-tab', event.target.id); });
+
+    $$('[data-item-search]', root).forEach(bindItemSearch);
+    $$('.item-pick', root).forEach((b) => b.addEventListener('click', () => {
+      const search = $('[data-item-search]', b.closest('form'));
+      search.value = b.dataset.item;
+      search.dispatchEvent(new Event('input'));
+    }));
+    $$('[data-count]', root).forEach((b) => b.addEventListener('click', () => {
+      $('input[name="count"]', b.closest('form')).value = b.dataset.count;
+    }));
 
     const enchant = $('[data-enchant]', root);
     const level = $('[data-enchant-level]', root);

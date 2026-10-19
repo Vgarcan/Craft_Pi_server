@@ -123,13 +123,54 @@ class Views:
     def item_name(self, identifier):
         return self.items.get(identifier) or pretty(identifier)
 
-    def slot(self, item=None, empty_label=''):
+    @staticmethod
+    def roman(level):
+        numerals = ('I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X')
+        return numerals[level - 1] if 1 <= level <= 10 else str(level)
+
+    def enchantment_name(self, identifier):
+        return catalog.ENCHANTMENTS.get(identifier, (pretty(identifier),))[0]
+
+    def item_lines(self, item):
+        """Líneas del tooltip del juego: nombre (aqua si está encantado, cursiva si se renombró),
+        encantamientos en gris, poción, irrompible y durabilidad."""
+        enchanted = bool(item.get('enchantments') or item.get('stored_enchantments'))
+        title = item.get('name') or self.item_name(item['id'])
+        classes = ' '.join(c for c in ('t-aqua' if enchanted else '', 't-italic' if item.get('name') else '') if c)
+        lines = [f'<span class="t-name {classes}">{e(title)}</span>']
+        for identifier, level in (item.get('enchantments') or []) + (item.get('stored_enchantments') or []):
+            lines.append(f'<span class="t-gray">{e(self.enchantment_name(identifier))} {e(self.roman(level))}</span>')
+        if item.get('potion'):
+            lines.append(f'<span class="t-blue">{e(pretty(item["potion"]))}</span>')
+        if item.get('unbreakable'):
+            lines.append('<span class="t-blue">Unbreakable</span>')
+        if item.get('max_damage') and item.get('damage'):
+            left = max(0, item['max_damage'] - item['damage'])
+            lines.append(f'<span class="t-gray">Durability: {left} / {item["max_damage"]}</span>')
+        if (item.get('count') or 1) != 1:
+            lines.append(f'<span class="t-gray">× {e(item["count"])}</span>')
+        return lines
+
+    def slot(self, item=None, empty_label='', href=None, selected=False, sprite=''):
+        """Casilla del inventario. Con href es un enlace al editor de esa casilla."""
+        tag = 'a' if href else 'div'
+        link = f' href="{e(href)}" data-slot-link' if href else ''
+        extra = ' selected' if selected else ''
         if not item:
-            return f'<div class="inv-slot empty" title="{e(empty_label)}"></div>'
+            label = f' title="{e(empty_label)}" aria-label="{e(empty_label or "Empty slot")}"'
+            return f'<{tag} class="inv-slot empty{extra}{f" sprite-{sprite}" if sprite else ""}"{link}{label}></{tag}>'
         count = item.get('count') or 1
-        return (f'<div class="inv-slot" title="{e(pretty(item["id"]))}" tabindex="0">{self.item_icon(item["id"])}'
-                + (f'<span class="count">{e(count)}</span>' if count != 1 else '')
-                + f'<span class="tooltip">{e(pretty(item["id"]))}{f" × {e(count)}" if count != 1 else ""}</span></div>')
+        enchanted = item.get('enchantments') or item.get('stored_enchantments') or item['id'] in (
+            'enchanted_book', 'enchanted_golden_apple', 'nether_star', 'experience_bottle')
+        bar = ''
+        if item.get('max_damage') and item.get('damage'):
+            left = max(0.0, 1 - item['damage'] / item['max_damage'])
+            hue = 'dur-high' if left > 0.6 else 'dur-mid' if left > 0.25 else 'dur-low'
+            bar = f'<span class="durability"><span class="{hue} w-{max(5, int(left * 20) * 5)}"></span></span>'
+        return (f'<{tag} class="inv-slot{" enchanted" if enchanted else ""}{extra}"{link} tabindex="0" '
+                f'aria-label="{e(item.get("name") or self.item_name(item["id"]))}">{self.item_icon(item["id"])}'
+                + (f'<span class="count">{e(count)}</span>' if count != 1 else '') + bar
+                + f'<span class="tooltip mc-tooltip">{"".join(self.item_lines(item))}</span></{tag}>')
 
     @staticmethod
     def csrf(session):
@@ -322,7 +363,7 @@ class Views:
                          '<p class="muted">Open a player to see their profile, inventory, statistics and server policies.</p>',
                          icon=self.texture('totem_of_undying', '', 'icon'))
 
-    def profile(self, p, session, map_base, spawn, others=()):
+    def profile(self, p, session, map_base, spawn, others=(), editing=None):
         name, vitals, location, stats = p['name'], p['vitals'], p['location'], p['stats']
         uuid = p['uuid']
         badges = ''.join(t for t in (
@@ -372,23 +413,46 @@ class Views:
             ('Respawn point', where(location.get('respawn')) if location.get('respawn') else
              f'World spawn <span class="mono">{e(", ".join(str(v) for v in spawn or []))}</span>'),
             ('Last death', where(location.get('death')))], ''), 'r-location', icon=self.texture('compass_00', '', 'icon'))
-        inventory = {item['slot']: item for item in p['inventory'] if isinstance(item.get('slot'), int)}
-        main = ''.join(self.slot(inventory.get(i)) for i in range(9, 36))
-        hotbar = ''.join(self.slot(inventory.get(i)) for i in range(9))
-        equipment = p.get('equipment') or {}
-        armor = ''.join(self.slot(equipment.get(s) or inventory.get(n), label)
-                        for s, n, label in (('head', 103, 'Helmet'), ('chest', 102, 'Chestplate'), ('legs', 101, 'Leggings'),
-                                            ('feet', 100, 'Boots')))
-        offhand = self.slot(equipment.get('offhand') or inventory.get(-106), 'Off hand')
-        ender = {item['slot']: item for item in p['ender_chest'] if isinstance(item.get('slot'), int)}
-        inventory_card = self.card('Inventory', f'<div class="inventory"><div class="inv-side"><div class="inv-armor">{armor}</div>'
-                                   f'<div class="inv-offhand">{offhand}</div></div><div class="inv-main"><div class="inv-grid">{main}</div>'
-                                   f'<div class="inv-grid hotbar-row">{hotbar}</div></div></div>'
-                                   + ('<p class="muted">Inventory is empty.</p>' if not p['inventory'] and not equipment else '')
-                                   + '<details><summary>Ender chest</summary><div class="inv-grid">'
-                                   + ''.join(self.slot(ender.get(i)) for i in range(27)) + '</div></details>'
-                                   + ('<p class="muted">Inventory comes from the last autosave while the player is online.</p>'
-                                      if p['online'] else ''), 'wide r-inventory', icon=self.texture('chest_minecart', '', 'icon'))
+        inventory = {item['slot']: item for item in p['inventory']}
+        ender = {item['slot']: item for item in p['ender_chest']}
+        base = f'/players/{p["uuid"]}?slot='
+        def cell(slot, label='', sprite=''):
+            item = inventory.get(slot) or ender.get(slot)
+            selected = slot == f'hotbar.{p.get("selected_slot")}'
+            return self.slot(item, label, f'{base}{slot}#slot-editor', selected, sprite)
+        armor = ''.join(cell(slot, label, {'Helmet': 'helmet', 'Chestplate': 'chestplate', 'Leggings': 'leggings',
+                                           'Boots': 'boots'}[label])
+                        for slot, label in catalog.ARMOR_SLOTS.values())
+        held = inventory.get(f'hotbar.{p.get("selected_slot")}')
+        doll = (f'<div class="inv-doll"><span class="head big" aria-hidden="true"></span>'
+                f'<b>{e(name)}</b><span class="muted small">'
+                + (f'Holding {e(held.get("name") or self.item_name(held["id"]))}' if held else 'Empty hand')
+                + '</span></div>')
+        def effect_row(fx):
+            seconds = fx['seconds']
+            left = '∞' if seconds < 0 else f'{seconds // 60}:{seconds % 60:02d}'
+            icon = self.texture('effect_' + fx['id'], '', 'effect-icon') or '<span class="effect-icon"></span>'
+            return (f'<li>{icon}<span><b>{e(pretty(fx["id"]))} '
+                    f'{e(self.roman(fx["level"]))}</b><span class="muted small">{e(left)}</span></span>'
+                    + self.act(p, session, 'effect-remove', 'Remove', 'small', fields={'effect': fx['id']}) + '</li>')
+        effects = ''.join(effect_row(fx) for fx in p.get('effects') or [])
+        effects_box = ('<div class="mc-window inv-effects"><h3>Active effects</h3>'
+                       + (f'<ul>{effects}</ul>' if effects else '<p class="muted small">No active effects.</p>') + '</div>')
+        source = (self.pill('ok', 'Live') if p.get('live') else
+                  self.pill('', 'Last save') if not p['online'] else self.pill('warn', 'Last save (live read failed)'))
+        inventory_card = self.card(
+            'Inventory',
+            f'<p class="badges">{source} <span class="muted small">Click any slot to edit it'
+            + ('' if p['online'] else ' (changes need the player online)') + '.</span></p>'
+            '<div class="inv-wrap"><div class="mc-window"><div class="inv-top">'
+            f'<div class="inv-armor">{armor}</div>{doll}'
+            f'<div class="inv-offhand">{cell("weapon.offhand", "Off hand", "shield")}</div></div>'
+            '<div class="inv-grid main-grid">' + ''.join(cell(f'inventory.{i}') for i in range(27)) + '</div>'
+            '<div class="inv-grid hotbar-row">' + ''.join(cell(f'hotbar.{i}') for i in range(9)) + '</div></div>'
+            '<div class="inv-column"><div class="mc-window ender"><h3>Ender chest</h3><div class="inv-grid">'
+            + ''.join(cell(f'enderchest.{i}') for i in range(27)) + f'</div></div>{effects_box}</div></div>',
+            'wide r-inventory', icon=self.texture('chest_minecart', '', 'icon'))
+        editor_card = self.slot_editor(p, session, editing, inventory.get(editing) or ender.get(editing)) if editing else ''
         headline = ''.join(f'<div class="stat"><span class="stat-value">{e(amount(stats["custom"].get(key), unit))}</span>'
                            f'<span class="stat-label">{e(label)}</span></div>'
                            for key, label, unit in STAT_LABELS if key in stats['custom'])
@@ -407,9 +471,64 @@ class Views:
                                       f'<ul class="advancements">{advancements or "<li class=muted>None yet</li>"}</ul>',
                                       icon=self.texture('nether_star', '', 'icon'))
         actions_card = self.player_actions(p, session, others, spawn, inventory)
-        return (header + actions_card + '<div class="grid two">' + vitals_card + location_card + '</div>' + inventory_card
-                + stats_card + advancements_card
+        return (header + editor_card + actions_card + '<div class="grid two">' + vitals_card + location_card + '</div>'
+                + inventory_card + stats_card + advancements_card
                 + '<p><a class="mc-btn" href="/players" data-nav>Back to players</a></p>')
+
+    @staticmethod
+    def slot_label(slot):
+        group, _, index = slot.partition('.')
+        names = {'hotbar': 'Hotbar', 'inventory': 'Inventory', 'enderchest': 'Ender chest'}
+        if group in names:
+            return f'{names[group]} slot {int(index) + 1}'
+        return {'armor.head': 'Helmet slot', 'armor.chest': 'Chestplate slot', 'armor.legs': 'Leggings slot',
+                'armor.feet': 'Boots slot', 'weapon.offhand': 'Off-hand slot'}.get(slot, slot)
+
+    def slot_editor(self, p, session, slot, item):
+        """Editor de una casilla («modo dios»). Sin JavaScript es una tarjeta; con él, una ventana."""
+        def form(do, body, cls=''):
+            return self.action_form(p, session, do, f'<input type="hidden" name="slot" value="{e(slot)}">{body}', cls)
+        def quick(do, label, kind='', confirm=''):
+            return self.act(p, session, do, label, kind, confirm, {'slot': slot})
+        close = f'<a class="mc-btn small" href="/players/{e(p["uuid"])}#inventory" data-slot-close>Close</a>'
+        if not item:
+            body = ('<p class="muted">This slot is empty.</p>'
+                    + form('slot-set', '<div class="give-row"><label class="grow">Put an item here'
+                           '<input type="text" name="item" required autocomplete="off" maxlength="64" spellcheck="false" '
+                           'placeholder="Search: diamond_sword, elytra…" data-item-search></label>'
+                           f'<label class="amount">Amount<input type="number" name="count" min="1" max="{catalog.STACK_LIMIT}" '
+                           'value="1" inputmode="numeric"></label><button class="mc-btn primary">Place</button></div>'
+                           '<div class="item-results js-only" data-item-results aria-live="polite"></div>', 'give-form'))
+        else:
+            enchants = ''.join(f'<option value="{e(k)}" data-max="{m}">{e(label)} (normal max {self.roman(m)})</option>'
+                               for k, (label, m) in catalog.ENCHANTMENTS.items())
+            durable = bool(item.get('max_damage'))
+            body = (
+                f'<div class="slot-preview"><div class="inv-slot big{" enchanted" if item.get("enchantments") else ""}">'
+                f'{self.item_icon(item["id"])}</div><div class="mc-tooltip static">{"".join(self.item_lines(item))}</div></div>'
+                + '<div class="pa-section"><h3>Enchant</h3>'
+                + form('slot-enchant', f'<div class="row"><label>Enchantment<select name="enchantment">{enchants}</select></label>'
+                       f'<label>Level<input type="number" name="level" min="1" max="{catalog.GOD_LEVEL}" value="5" '
+                       'inputmode="numeric"></label><button class="mc-btn primary">Enchant</button></div>')
+                + f'<p class="muted small">God mode: any enchantment on any item, up to level {catalog.GOD_LEVEL}. '
+                  'Levels above the normal maximum work for most combat and tool enchantments.</p></div>'
+                + '<div class="pa-section"><h3>Item</h3><div class="row">'
+                + (quick('slot-repair', 'Repair') if durable else '')
+                + (quick('slot-unbreakable', 'Make unbreakable') if durable and not item.get('unbreakable') else '')
+                + (quick('slot-unenchant', 'Remove enchantments', 'danger')
+                   if item.get('enchantments') or item.get('stored_enchantments') else '')
+                + quick('slot-duplicate', 'Duplicate', '', 'Copy this item to the first free slot?')
+                + quick('slot-clear', 'Delete', 'danger', 'Delete this item? It cannot be undone.')
+                + '</div></div><div class="pa-section"><h3>Name and amount</h3><div class="row">'
+                + form('slot-rename', f'<label>Name<input type="text" name="text" required maxlength="{catalog.NAME_LIMIT}" '
+                       f'value="{e(item.get("name") or "")}" placeholder="{e(self.item_name(item["id"]))}"></label>'
+                       '<button class="mc-btn">Rename</button>', 'row')
+                + form('slot-count', f'<label>Amount<input type="number" name="count" min="1" max="{catalog.STACK_LIMIT}" '
+                       f'value="{e(item.get("count") or 1)}" inputmode="numeric"></label><button class="mc-btn">Set</button>', 'row')
+                + '</div></div>')
+        offline = '' if p['online'] else '<div class="alert warn">The player is offline: changes need them in the game.</div>'
+        return (f'<section class="panel wide slot-editor" id="slot-editor"><h2>{self.item_icon("anvil", "icon")}'
+                f'{e(self.slot_label(slot))}</h2>{offline}{body}<p>{close}</p></section>')
 
     # --- Acciones de jugador ------------------------------------------------------------------
     def act(self, p, session, do, label, kind='', confirm='', fields=None, icon='', offline_ok=False, hint=''):

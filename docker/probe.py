@@ -115,10 +115,21 @@ def rcon(command, properties=Path('/data/server.properties')):
         else:
             raise ValueError('Sin confirmación de autenticación RCON')
         send(2, 2, command)
-        identifier, _, payload = receive()
-        if identifier != 2:
-            raise ValueError('Respuesta RCON inesperada')
-        return payload
+        # Las respuestas largas (p. ej. «data get entity») llegan en varios paquetes de 4096 bytes.
+        # Un paquete de tipo desconocido detrás del comando marca el final: el servidor lo contesta
+        # («Unknown request») sólo después de enviar todos los trozos de la respuesta.
+        send(3, 0, '')
+        parts, total = [], 0
+        while True:
+            identifier, _, payload = receive()
+            if identifier == 3:
+                return ''.join(parts)
+            if identifier != 2:
+                raise ValueError('Respuesta RCON inesperada')
+            total += len(payload)
+            if total > MAX_PACKET:
+                raise ValueError('Respuesta RCON demasiado grande')
+            parts.append(payload)
 
 
 def geyser_dump(path=Path('/data/plugins/Geyser-Spigot/dump.json'), timeout=25):

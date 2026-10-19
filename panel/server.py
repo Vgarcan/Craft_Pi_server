@@ -247,7 +247,9 @@ class App:
         if method == 'GET' and (match := re.fullmatch(r'/exports/([a-z0-9-]{1,120}\.(?:zip|mcworld))', path)):
             return self.download(match[1])
         if match := re.fullmatch(r'/players/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', path):
-            return (self.profile_page if method == 'GET' else self.profile_post)(session, form, match[1])
+            if method == 'GET':
+                return self.profile_page(session, form, match[1], query.get('slot', [''])[0])
+            return self.profile_post(session, form, match[1])
         routes = {
             ('GET', '/'): self.dashboard, ('POST', '/action'): self.action,
             ('GET', '/players'): self.players_page, ('POST', '/players'): self.players_post,
@@ -477,7 +479,7 @@ class App:
         body = (self.views.known(known.get('players', [])) if known.get('ok') else '') + self.views.players(status, session)
         return self.render('Players', body, session, '/players', slug='players')
 
-    def profile_page(self, session, form, uuid):
+    def profile_page(self, session, form, uuid, slot=''):
         profile = self.helper(['player', uuid])
         if not profile.get('ok'):
             return self.render('Player', f'<div class="alert bad">{html.escape(str(profile.get("output", "")))}</div>',
@@ -485,8 +487,9 @@ class App:
         status = self.helper(['status'])
         map_base = self.config['map_url'] if (status.get('bluemap') or {}).get('enabled') else ''
         others = [p['name'] for p in self.helper(['players']).get('players', []) if p['online'] and p['uuid'] != uuid]
-        return self.render(profile['name'], self.views.profile(profile, session, map_base, status.get('spawn'), others),
-                           session, '/players', slug='profile')
+        editing = slot if slot in catalog.SLOTS else None
+        return self.render(profile['name'], self.views.profile(profile, session, map_base, status.get('spawn'), others,
+                                                               editing), session, '/players', slug='profile')
 
     def player_request(self, uuid, fields):
         """argv del helper para una acción de jugador (formulario o JSON), o (None, motivo).
@@ -497,13 +500,14 @@ class App:
         if uuid not in known or action not in catalog.ACTIONS:
             return None, 'Unknown player or action.'
         values = [str(fields.get(name, '')).strip() for name in catalog.FIELDS.get(action, ())]
-        if action == 'give':
-            wanted = values[0].lower().removeprefix('minecraft:')
+        if action in ('give', 'slot-set'):
+            at = 0 if action == 'give' else 1  # posición del objeto entre los campos
+            wanted = values[at].lower().removeprefix('minecraft:')
             names = {label.lower(): key for key, label in self.items.items()}
             item = wanted.replace(' ', '_') if wanted.replace(' ', '_') in self.items else names.get(wanted, wanted)
             if self.items and item not in self.items:
-                return None, f'Unknown item "{values[0][:40]}". Pick one from the search results.'
-            values = [item, values[1] or '1']
+                return None, f'Unknown item "{values[at][:40]}". Pick one from the search results.'
+            values[at], values[at + 1] = item, values[at + 1] or '1'
         if action == 'tp-coords' and not values[2]:
             values[2] = 'surface'
         return ['player-action', action, known[uuid], *values], None

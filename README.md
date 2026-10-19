@@ -251,10 +251,17 @@ Cada jugador tiene una ficha:
 - **Datos:** edición, estado, operador, whitelist, ban, UUID y XUID, primera y última conexión, tiempo jugado.
 - **Vitales:** vida, hambre, nivel.
 - **Ubicación:** posición actual, cama y última muerte, con enlace al mapa.
-- **Inventario:** armadura y cofre de ender, con los iconos reales.
+- **Inventario como en el juego:** armadura (con las siluetas de las casillas vacías), figura del jugador con lo que tiene en la mano, mano secundaria, inventario y barra rápida con la casilla seleccionada, cofre de ender y efectos activos con su tiempo. Cada objeto muestra el tooltip del juego (nombre, encantamientos, poción, irrompible, durabilidad), brilla si está encantado y lleva su barra de desgaste.
 - **Estadísticas y logros.**
 
-Con el jugador conectado, posición y vida se leen en vivo.
+Con el jugador conectado, todo se lee **en vivo**: una sola consulta `data get entity` trae vida, posición, inventario, cofre de ender y efectos. Desconectado, se muestra el último guardado.
+
+**Editor de casillas («modo dios»).** Pulsa cualquier casilla:
+- **Con un objeto:** encantarlo con cualquier encantamiento hasta nivel 255 (aunque no sea compatible con el objeto), quitarle los encantamientos, repararlo, hacerlo irrompible, renombrarlo, cambiar la cantidad (1–99), duplicarlo en la primera casilla libre o borrarlo.
+- **Vacía:** poner ahí cualquier objeto, con el mismo buscador.
+- **Efectos activos:** se pueden quitar uno a uno.
+
+Usa `/item modify` y `/item replace` con modificadores en JSON escapado; necesita al jugador conectado. Sin JavaScript, el editor aparece como una tarjeta (`?slot=hotbar.0`).
 
 ![Acciones: dar objetos y kits](docs/images/profile-items.png)
 

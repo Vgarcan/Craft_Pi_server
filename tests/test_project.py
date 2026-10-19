@@ -375,6 +375,30 @@ class FreshInstallTests(unittest.TestCase):
 
 
 class PackagingTests(unittest.TestCase):
+    def test_sources_stay_compatible_with_python_311(self):
+        """Raspberry Pi OS Bookworm trae Python 3.11: nada de f-strings que reutilicen la comilla exterior
+        dentro de la expresión (sólo válidas desde 3.12)."""
+        import tokenize
+        def quote(text):
+            text = text.lstrip('rRbBfFuU')
+            return text[:3] if text[:3] in ('"""', "\'\'\'") else text[:1]
+        problems = []
+        for path in sorted(ROOT.glob('**/*.py')):
+            if '.git' in path.parts:
+                continue
+            stack = []
+            with path.open(encoding='utf-8') as source:
+                for token in tokenize.generate_tokens(source.readline):
+                    if token.type == tokenize.FSTRING_START:
+                        if quote(token.string) in stack:
+                            problems.append(f'{path.relative_to(ROOT)}:{token.start[0]}')
+                        stack.append(quote(token.string))
+                    elif token.type == tokenize.FSTRING_END:
+                        stack.pop()
+                    elif stack and token.type == tokenize.STRING and quote(token.string) in stack:
+                        problems.append(f'{path.relative_to(ROOT)}:{token.start[0]}')
+        self.assertEqual(problems, [])
+
     def test_every_dockerfile_copy_is_allowed_by_dockerignore(self):
         allowed = {line[1:] for line in (ROOT / 'docker/.dockerignore').read_text().split() if line.startswith('!')}
         copied = {line.split()[-2] for line in (ROOT / 'docker/Dockerfile').read_text().splitlines()
@@ -535,13 +559,39 @@ class ProtocolTests(unittest.TestCase):
         def packet(identifier, kind, body):
             value = struct.pack('<ii', identifier, kind) + body.encode() + b'\0\0'
             return struct.pack('<i', len(value)) + value
-        incoming = io.BytesIO(packet(1, 0, '') + packet(1, 2, '') + packet(2, 0, 'OK'))
+        # Respuesta larga en dos trozos y, después, la contestación al paquete marcador.
+        incoming = io.BytesIO(packet(1, 0, '') + packet(1, 2, '') + packet(2, 0, 'O' * 4096) + packet(2, 0, 'K')
+                              + packet(3, 0, 'Unknown request 0'))
         fake.recv.side_effect = incoming.read
         with tempfile.TemporaryDirectory() as directory:
             props = Path(directory) / 'server.properties'
             props.write_text('rcon.port=25575\nrcon.password=secret\n')
             with patch.object(probe.socket, 'create_connection', return_value=fake):
-                self.assertEqual(probe.rcon('list', props), 'OK')
+                self.assertEqual(probe.rcon('list', props), 'O' * 4096 + 'K')
+        sent = b''.join(call.args[0] for call in fake.sendall.call_args_list)
+        self.assertIn(struct.pack('<ii', 3, 0) + b'\0\0', sent)  # el marcador va detrás del comando
+
+    def test_snbt_reader_matches_data_get_output(self):
+        from mclan import snbt
+        reply = ('.Steve has the following entity data: {Health: 17.5f, foodLevel: 18, Pos: [9.85d, 68.0d, -4.25d], '
+                 'UUID: [I; 0, 0, 590331, -818849628], Inventory: [{Slot: 0b, count: 1, id: "minecraft:diamond_sword", '
+                 'components: {"minecraft:enchantments": {"minecraft:sharpness": 5}, "minecraft:damage": 12, '
+                 '"minecraft:custom_name": {text: \'Bob\\\'s "blade"\', italic: 1b}}}], XpP: 1.0E-4f, '
+                 'empty: [], flag: true, name: "line\\nbreak \\u00e9"}')
+        data = snbt.entity_data(reply)
+        self.assertEqual(data['Health'], 17.5)
+        self.assertEqual(data['Pos'], [9.85, 68.0, -4.25])
+        self.assertEqual(data['UUID'], [0, 0, 590331, -818849628])
+        sword = data['Inventory'][0]
+        self.assertEqual((sword['Slot'], sword['id'], sword['count']), (0, 'minecraft:diamond_sword', 1))
+        self.assertEqual(sword['components']['minecraft:enchantments'], {'minecraft:sharpness': 5})
+        self.assertEqual(sword['components']['minecraft:custom_name']['text'], 'Bob\'s "blade"')
+        self.assertEqual((data['XpP'], data['empty'], data['flag'], data['name']), (1.0e-4, [], 1, 'line\nbreak é'))
+        self.assertIsNone(snbt.entity_data('No entity was found'))
+        for bad in ('{a: [I; 1, "x"]}', '{a: 1', '{a: "open}', '{a: 1} trailing', '{' * 100 + '}' * 100,
+                    '{a: "\\q"}'):
+            with self.subTest(bad=bad), self.assertRaises(snbt.SnbtError):
+                snbt.loads(bad)
 
 
 class DiagnosticTests(unittest.TestCase):

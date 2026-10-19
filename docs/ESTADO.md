@@ -428,3 +428,23 @@ Tres revisiones independientes, de sólo lectura (documentación frente a códig
   - El panel escribe en `data/` pero no en la raíz, lee la clave y sirve login y texturas.
   - Ataque simulado: un enlace `data/panel.json → /etc/hostname` hace que `panel/install.sh` se niegue («no es un archivo normal») y `/etc/hostname` queda intacto. Después se restauró la configuración.
   - `tools/audit.sh --verify`: sin fallos.
+
+## 0.9.0: inventario como en el juego y editor de casillas (19-10-2026)
+
+- **Petición del operador:** que el inventario se vea como en el juego y poder editar los objetos («en la web es modo dios»).
+- **Implementado:**
+  - **Inventario:** ventana al estilo del juego, con armadura y siluetas, figura, mano secundaria, 27 casillas, barra rápida con la seleccionada, cofre de ender y efectos activos. Tooltip del juego, brillo de encantamiento y barra de durabilidad (`catalog.MAX_DURABILITY`).
+  - **Datos en vivo:** una sola consulta `data get entity` leída con un lector SNBT acotado (`scripts/mclan/snbt.py`).
+  - **RCON:** `probe.py` reúne las respuestas de más de 4096 bytes con un paquete marcador.
+  - **Editor de casillas:**
+    - acciones `slot-enchant` (cualquier encantamiento, 1–255), `slot-unenchant`, `slot-repair`, `slot-unbreakable`, `slot-rename`, `slot-count`, `slot-clear`, `slot-set` y `slot-duplicate`, más `effect-remove`;
+    - todo validado con listas cerradas de casillas;
+    - los nombres siguen las mismas reglas que los mensajes.
+  - **Compatibilidad:** prueba nueva que exige f-strings compatibles con Python 3.11 (Bookworm).
+- **Pruebas:**
+  - 151 automatizadas.
+  - Vista previa en Chromium con datos inventados, a 1280 y 390 px: maqueta, tooltip, editor en ventana, cierre y sin desbordes.
+- **Pendiente de hardware:**
+  - sintaxis real de `/item modify` con cada modificador en Paper 26.3;
+  - lectura en vivo de un inventario grande;
+  - prueba con un jugador conectado.

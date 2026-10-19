@@ -64,6 +64,32 @@ GIVE_LIMIT = 64
 COORDINATE_LIMIT = 29_999_984
 HEIGHT = (-64, 320)
 
+# Casillas en el nombre que usan /item y /loot: barra rápida, inventario, armadura, mano secundaria y
+# cofre de ender. En el .dat, Slot 0-8 es la barra y 9-35 el inventario.
+SLOTS = (tuple(f'hotbar.{i}' for i in range(9)) + tuple(f'inventory.{i}' for i in range(27))
+         + ('armor.head', 'armor.chest', 'armor.legs', 'armor.feet', 'weapon.offhand')
+         + tuple(f'enderchest.{i}' for i in range(27)))
+ARMOR_SLOTS = {'head': ('armor.head', 'Helmet'), 'chest': ('armor.chest', 'Chestplate'),
+               'legs': ('armor.legs', 'Leggings'), 'feet': ('armor.feet', 'Boots')}
+GOD_LEVEL = 255       # nivel máximo de encantamiento desde el editor de casillas («modo dios»)
+NAME_LIMIT = 50       # nombre personalizado de un objeto
+STACK_LIMIT = 99      # cantidad máxima que admite una casilla
+
+# Durabilidad máxima por objeto (Java 26.x), para la barra de desgaste cuando el objeto no la declara.
+_TIERS = {'wooden': 59, 'stone': 131, 'copper': 190, 'iron': 250, 'golden': 32, 'diamond': 1561, 'netherite': 2031}
+_ARMOR = {'leather': (55, 80, 75, 65), 'chainmail': (165, 240, 225, 195), 'copper': (121, 176, 165, 143),
+          'iron': (165, 240, 225, 195), 'golden': (77, 112, 105, 91), 'diamond': (363, 528, 495, 429),
+          'netherite': (407, 592, 555, 481)}
+MAX_DURABILITY = {
+    **{f'{tier}_{tool}': value for tier, value in _TIERS.items()
+       for tool in ('sword', 'pickaxe', 'axe', 'shovel', 'hoe', 'spear')},
+    **{f'{material}_{piece}': value for material, values in _ARMOR.items()
+       for piece, value in zip(('helmet', 'chestplate', 'leggings', 'boots'), values)},
+    'turtle_helmet': 275, 'bow': 384, 'crossbow': 465, 'trident': 250, 'shield': 336, 'elytra': 432, 'mace': 500,
+    'fishing_rod': 64, 'shears': 238, 'flint_and_steel': 64, 'carrot_on_a_stick': 25, 'warped_fungus_on_a_stick': 100,
+    'brush': 64, 'wolf_armor': 64,
+}
+
 # Acciones que necesitan al jugador conectado (las de política funcionan también sin él).
 OFFLINE_OK = {'op', 'deop', 'ban', 'pardon'}
 # Mensaje de éxito para el aviso del panel.
@@ -76,6 +102,10 @@ LABELS = {
     'tp-death': 'Teleported to their last death, protected for 30 seconds.', 'tp-to': 'Teleported.',
     'bring': 'Player brought here.', 'tp-coords': 'Teleported to the coordinates.', 'enchant': 'Item enchanted.',
     'fireworks': 'Fireworks launched.', 'thunder': 'Thunderclap!', 'pet': 'Pet delivered.', 'message': 'Message sent.',
+    'slot-enchant': 'Enchantment applied.', 'slot-unenchant': 'Enchantments removed.', 'slot-repair': 'Item repaired.',
+    'slot-unbreakable': 'Item is now unbreakable.', 'slot-rename': 'Item renamed.', 'slot-count': 'Amount changed.',
+    'slot-clear': 'Item deleted.', 'slot-set': 'Item placed.', 'slot-duplicate': 'Item duplicated.',
+    'effect-remove': 'Effect removed.',
 }
 # Campos del formulario o del JSON que lleva cada acción, en el orden en que los recibe el helper.
 FIELDS = {
@@ -83,5 +113,9 @@ FIELDS = {
     'effect': ('effect', 'duration', 'level'), 'tp-to': ('target',), 'bring': ('target',),
     'tp-coords': ('dimension', 'x', 'y', 'z'), 'enchant': ('enchantment', 'level'), 'pet': ('pet',),
     'message': ('kind', 'text'),
+    'slot-enchant': ('slot', 'enchantment', 'level'), 'slot-unenchant': ('slot',), 'slot-repair': ('slot',),
+    'slot-unbreakable': ('slot',), 'slot-rename': ('slot', 'text'), 'slot-count': ('slot', 'count'),
+    'slot-clear': ('slot',), 'slot-set': ('slot', 'item', 'count'), 'slot-duplicate': ('slot',),
+    'effect-remove': ('effect',),
 }
 ACTIONS = tuple(LABELS)
