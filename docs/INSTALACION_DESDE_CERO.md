@@ -4,12 +4,14 @@
 
 1. Preparar hardware y tarjeta
 2. Instalar Raspberry Pi OS Lite de 64 bits
-3. Primer acceso por SSH
+3. Primer acceso por SSH y ajustes del sistema
 4. Transferir y preparar el proyecto
-5. Comprobar e instalar
-6. Probar desde ambos clientes
-7. Verificar persistencia y reinicio
-8. Hacer y probar un backup
+5. Comprobar e instalar el servidor
+6. Instalar el panel web
+7. Primeros jugadores
+8. Probar desde ambos clientes
+9. Verificar persistencia y reinicio
+10. Hacer y probar un backup
 
 ## 1. Preparar hardware y tarjeta
 
@@ -30,7 +32,7 @@ En tu ordenador abre [Raspberry Pi Imager](https://www.raspberrypi.com/software/
 
 Introduce la tarjeta en la Pi apagada, conecta Ethernet y alimentación, y espera el primer arranque.
 
-## 3. Primer acceso por SSH
+## 3. Primer acceso por SSH y ajustes del sistema
 
 Desde PowerShell, una terminal Linux o macOS, sustituye `TU_USUARIO`:
 
@@ -61,6 +63,24 @@ sudo apt-get install -y python3 unzip ca-certificates iproute2
 ```
 
 En esta guía no se instala Java globalmente: lo contiene la imagen Docker. Tampoco se ejecuta una actualización general del sistema como parte del instalador. El mantenimiento del OS es una decisión separada del operador.
+
+### Activar el límite de memoria (recomendado, antes de instalar)
+
+Raspberry Pi OS arranca con el cgroup de memoria desactivado: sin él, Docker no aplica el límite de 3 GiB del contenedor. Añade `cgroup_enable=memory` al final de la única línea de `cmdline.txt`, conservando una copia:
+
+```bash
+sudo cp /boot/firmware/cmdline.txt /boot/firmware/cmdline.txt.bak
+grep -q cgroup_enable=memory /boot/firmware/cmdline.txt || \
+  sudo sed -i '1 s/$/ cgroup_enable=memory/' /boot/firmware/cmdline.txt
+```
+
+Si instalaste la versión con escritorio y no lo necesitas, arrancar sin él deja casi 1 GiB más para el servidor:
+
+```bash
+sudo systemctl set-default multi-user.target    # para volver: graphical.target
+```
+
+Reinicia (`sudo reboot`), vuelve a entrar por SSH y comprueba que `grep -w memory /sys/fs/cgroup/cgroup.controllers` muestra `memory`. Para deshacer el primer cambio, restaura `cmdline.txt.bak`.
 
 ## 4. Transferir y preparar el proyecto
 
@@ -99,8 +119,11 @@ En la Pi, sólo si ambos destinos son nuevos:
 sudo unzip ~/Craft_Pi_server-main.zip -d /opt
 sudo mv /opt/Craft_Pi_server-main /opt/minecraft-lan-installer
 cd /opt/minecraft-lan-installer
-sudo chmod +x install.sh manage.sh tests/run.sh docker/entrypoint.sh
+sudo chmod +x install.sh manage.sh tests/run.sh docker/entrypoint.sh panel/install.sh tools/audit.sh
+sha256sum -c --quiet MANIFEST.sha256 && echo 'Archivos íntegros'
 ```
+
+`MANIFEST.sha256` contiene el SHA-256 de cada archivo: si alguno no coincide, vuelve a descargar el ZIP.
 
 ### Si ya descargaste el paquete original del proyecto
 
@@ -114,7 +137,7 @@ sudo chmod +x install.sh manage.sh tests/run.sh docker/entrypoint.sh
 
 No mezcles los nombres de ambos ZIP. El código y la carpeta final son los mismos; cambia el nombre de la carpeta que genera cada descarga. Si eliges otra ubicación, utiliza siempre esa misma ruta en los comandos siguientes.
 
-## 5. Comprobar e instalar
+## 5. Comprobar e instalar el servidor
 
 Primero:
 
@@ -145,7 +168,40 @@ sudo ./manage.sh logs --tail 200
 
 Si se trata de un fallo transitorio inicial, repite el instalador; no elimines `data/` para «empezar de nuevo». Si existe `state/operation.json`, sigue la guía de recuperación.
 
-## 6. Probar desde ambos clientes
+## 6. Instalar el panel web
+
+```bash
+sudo panel/install.sh
+```
+
+Crea el usuario sin privilegios `mclan-panel`, el certificado para la IP, la regla sudo limitada al helper y el servicio, y extrae las texturas y el catálogo de objetos del cliente de Minecraft que descarga BlueMap. Si BlueMap aún no lo ha descargado (es normal en los primeros minutos), el script espera hasta 10 minutos. Si aun así avisa de que faltan, el panel funciona igual: repite `sudo panel/install.sh` un rato después.
+
+Anota la huella SHA-256 que imprime. Abre `https://IP_DE_LA_PI:8443/` desde otro equipo de tu red, comprueba que el navegador muestra esa misma huella y acepta el certificado autofirmado. La contraseña inicial está en:
+
+```bash
+sudo cat /etc/mclan-panel/initial-password
+```
+
+Cámbiala en **Account** nada más entrar.
+
+## 7. Primeros jugadores
+
+La whitelist está activa: nadie entra hasta que lo añadas. En el panel, **Players → Add a player**:
+
+- Java: el nombre de la cuenta.
+- Bedrock: el gamertag sin espacios. Si el panel avisa de que Floodgate no lo conoce, pide al jugador que intente entrar una vez y pulsa **Open 5 min and wait** en su intento rechazado; o añádelo por su XUID.
+
+Después abre tu propio perfil y usa **Actions → Admin → Make operator**. Opcionalmente, pregenera el mundo y fija su borde como indica el README (sección 3.6) para que el juego y el mapa vayan fluidos.
+
+Comprueba todo con la auditoría:
+
+```bash
+sudo tools/audit.sh --verify
+```
+
+Debe terminar con «Resultado: sin fallos».
+
+## 8. Probar desde ambos clientes
 
 Usa un Java de la **versión Minecraft indicada por el instalador**, y un Bedrock del rango soportado. No compares el número Java con el de Bedrock como si fueran la misma serie de versiones.
 
@@ -158,7 +214,7 @@ Entra desde ambos, comprueba que ven el mismo mundo y que pueden interactuar con
 
 La autenticación y el protocolo pueden necesitar conectividad exterior aun tratándose de un servidor alojado en LAN. No cambies `online-mode=false` para sortear un problema de autenticación.
 
-## 7. Verificar persistencia y reinicio
+## 9. Verificar persistencia y reinicio
 
 Haz esta prueba en el mundo de prueba inicial:
 
@@ -173,7 +229,7 @@ Haz esta prueba en el mundo de prueba inicial:
 
 Si paras el servidor manualmente antes de reiniciar el host, `unless-stopped` respeta esa parada. Esa prueba debe terminar con el servicio parado hasta un `start` explícito.
 
-## 8. Hacer y probar un backup
+## 10. Hacer y probar un backup
 
 Antes de utilizar el mundo como definitivo:
 

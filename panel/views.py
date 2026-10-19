@@ -105,7 +105,8 @@ class Views:
         losas, muros y vallas su bloque base, camas y estandartes la lana de su color."""
         identifier = str(identifier)
         names = [f'item_{identifier}', f'block_{identifier}', f'block_{identifier}_side', f'block_{identifier}_front',
-                 f'block_{identifier}_top', f'item_{identifier}_spawn_egg', f'item_{identifier}_00']
+                 f'block_{identifier}_top', f'item_{identifier}_spawn_egg', f'item_{identifier}_00',
+                 f'item_{identifier.removeprefix("enchanted_")}']
         base = re.sub(r'_(stairs|slab|wall|fence_gate|fence|button|pressure_plate)$', '', identifier)
         if base != identifier:
             names += [f'block_{base}', f'block_{base}s', f'block_{base}_planks', f'block_{base.removesuffix("_brick")}_bricks']
@@ -453,7 +454,7 @@ class Views:
             'spellcheck="false" placeholder="Search: diamond, elytra, cake…" data-item-search></label>'
             f'<label class="amount">Amount<input type="number" name="count" min="1" max="{catalog.GIVE_LIMIT}" value="1" '
             'inputmode="numeric"></label><button class="mc-btn primary">Give</button></div>'
-            f'<div class="js-only quick-row"><span class="muted small">Amount</span>{counts}</div>'
+            f'<div class="js-only quick-row"><span class="muted small">Quick</span>{counts}</div>'
             '<div class="item-results js-only" data-item-results aria-live="polite"></div>'
             f'<div class="js-only quick-row picks"><span class="muted small">Popular</span>{picks}</div>'), 'give-form')
         kits = ''.join(

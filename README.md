@@ -1,104 +1,123 @@
-# Craft Pi Server — Minecraft LAN Server Installer
+# Craft Pi Server
 
-Instalador y administrador de **Paper + GeyserMC + Floodgate**, dentro de Docker, orientado a una **Raspberry Pi 5 de 4 GB**, Raspberry Pi OS Lite de **64 bits** y microSD de **128 GB**.
+Servidor de Minecraft para tu casa en una **Raspberry Pi 5 de 4 GB**: un solo mundo para jugadores **Java y Bedrock**, un **panel web** con estilo Minecraft para administrarlo desde el móvil o el ordenador, y un mapa 3D en vivo. Todo queda en tu red local: no se abren puertos del router.
+
+![Panel web: Dashboard](docs/images/dashboard.png)
+
+- **Java y Bedrock en el mismo mundo**: Paper + Geyser + Floodgate, listo para NetherNet (Bedrock 26.60+). Con ViaVersion también entran clientes Java de otras versiones, por ejemplo QuestCraft en Meta Quest.
+- **Panel web**: estado en vivo, whitelist, perfiles de jugador con inventario y estadísticas, acciones (dar objetos, kits, efectos, teletransporte, mensajes…), consola, backups, auditoría y una biblioteca de hasta 50 mundos.
+- **Skins de Bedrock completas**, también las del creador de personajes, gracias al addon propio MclanSkins.
+- **Mapa BlueMap** en `http://IP_DE_LA_PI:8100/`.
+- **Operación segura**: versiones fijadas por SHA-256, backups verificados archivo por archivo, actualizaciones con snapshot previo y vuelta atrás, RCON nunca publicado y panel sin privilegios.
+
+> Las capturas usan datos de demostración. Las texturas y el logo de Minecraft no están en este repositorio: el panel los extrae en tu Pi del cliente oficial que descarga BlueMap.
 
 ## Índice
 
-1. [Alcance y estado de verificación](#1-alcance-y-estado-de-verificación)
+1. [Estado del proyecto](#1-estado-del-proyecto)
 2. [Requisitos](#2-requisitos)
-3. [Descarga e instalación](#3-descarga-e-instalación)
-4. [Arquitectura y archivos](#4-arquitectura-y-archivos)
-5. [Cómo instala y selecciona versiones](#5-cómo-instala-y-selecciona-versiones)
-6. [Conexión Java y Bedrock](#6-conexión-java-y-bedrock)
-7. [Administración](#7-administración)
-8. [Backups y restauración](#8-backups-y-restauración)
-9. [Actualizaciones](#9-actualizaciones)
-10. [Configuración y memoria](#10-configuración-y-memoria)
-11. [Red y arranque automático](#11-red-y-arranque-automático)
-12. [Diagnóstico](#12-diagnóstico)
-13. [Pruebas y desarrollo](#13-pruebas-y-desarrollo)
-14. [Fuentes y decisiones](#14-fuentes-y-decisiones)
-15. [Panel web y mapa](#15-panel-web-y-mapa)
+3. [Instalación completa, paso a paso](#3-instalación-completa-paso-a-paso)
+4. [Conectarse a jugar](#4-conectarse-a-jugar)
+5. [El panel web](#5-el-panel-web)
+6. [Mapa BlueMap](#6-mapa-bluemap)
+7. [Biblioteca de mundos](#7-biblioteca-de-mundos)
+8. [Skins de Bedrock (MclanSkins)](#8-skins-de-bedrock-mclanskins)
+9. [Administración desde la terminal](#9-administración-desde-la-terminal)
+10. [Backups y restauración](#10-backups-y-restauración)
+11. [Actualizar](#11-actualizar)
+12. [Configuración y memoria](#12-configuración-y-memoria)
+13. [Red y arranque automático](#13-red-y-arranque-automático)
+14. [Diagnóstico](#14-diagnóstico)
+15. [Arquitectura, archivos y desarrollo](#15-arquitectura-archivos-y-desarrollo)
+16. [Fuentes y licencias](#16-fuentes-y-licencias)
 
-## 1. Alcance y estado de verificación
+## 1. Estado del proyecto
 
-El código, las pruebas, la configuración Docker y las guías se entregan juntos. La versión 0.1.0 se preparó sin hardware; desde la **0.2.0** el proyecto se ha instalado y ensayado en una Raspberry Pi 5 de 4 GB. El estado por fases, con la distinción entre **implementado** y **verificado en hardware**, está en [ESTADO.md](docs/ESTADO.md). El detalle de cada comprobación está en [VALIDACION.md](docs/VALIDACION.md).
+El proyecto está instalado y en uso en una Raspberry Pi 5 de 4 GB con Raspberry Pi OS de 64 bits. [docs/ESTADO.md](docs/ESTADO.md) separa lo **implementado** de lo **verificado en hardware**, fase a fase; [docs/VALIDACION.md](docs/VALIDACION.md) detalla las pruebas.
 
-El instalador sólo muestra una verificación local correcta después de comprobar:
+El instalador sólo da por buena una instalación tras comprobar desde la propia Pi:
 
-- Estado estable y `healthy` del contenedor.
-- Respuesta **Java Server List Ping** mediante TCP y **RakNet Unconnected Pong** mediante UDP.
-- Que Geyser confirma en ese arranque el **signaling NetherNet** integrado y que su puerto TCP publicado acepta conexiones.
-- Que Geyser y Floodgate están habilitados, mediante un diagnóstico **offline** generado por la instancia de Geyser cargada.
-- Que el protocolo Java real de Paper coincide con el soportado por esa build de Geyser.
-- Que Geyser utiliza autenticación Floodgate y Java mantiene `online-mode=true`.
-- Que ambos protocolos responden también a través de los puertos publicados en la IP del host.
+- Contenedor estable y `healthy`.
+- Java (Server List Ping por TCP) y Bedrock (RakNet por UDP), también a través de los puertos publicados en la IP LAN.
+- Signaling NetherNet de Geyser iniciado y su puerto TCP aceptando conexiones.
+- Mediante un diagnóstico offline de la instancia cargada:
+  - Geyser y Floodgate habilitados, igual que cada plugin de la release (BlueMap, Chunky, ViaVersion, ViaBackwards, MclanSkins) salvo los que hayas desactivado;
+  - protocolo Java real de Paper igual al de la build de Geyser;
+  - autenticación Floodgate con `online-mode=true`.
 
-Eso prueba servicios y conectividad **desde la propia Pi**. La aceptación final necesita entrar y jugar desde un equipo Java y un dispositivo Bedrock reales de tu LAN. Un ping no prueba el inicio de sesión ni el rendimiento.
+Eso prueba servicios y red, no el inicio de sesión ni el rendimiento. La prueba final es entrar y jugar desde un Java y un Bedrock reales de tu LAN.
 
-Se contempla una instalación por host. No incluye panel web, mapa, mods de Forge/Fabric, soporte VR específico ni publicación en Internet. Esas ampliaciones requieren otro alcance.
+**Fuera de alcance:** publicar el servidor en Internet, mods de Forge o Fabric y varias instalaciones en el mismo equipo.
 
 ## 2. Requisitos
 
-| Elemento | Requisito o valor inicial |
+| Elemento | Requisito |
 | --- | --- |
-| Equipo objetivo | Raspberry Pi 5, 4 GB, alimentación adecuada y refrigeración activa |
-| Sistema | Raspberry Pi OS Lite de 64 bits basado en Debian Bookworm 12 o Trixie 13, con systemd |
-| Arquitectura | Kernel `aarch64`/`arm64` y paquetes `arm64` |
-| Almacenamiento | microSD de 128 GB recomendada, sistema de archivos Linux; 8 GiB libres en el proyecto y 4 GiB en el almacenamiento de Docker |
-| Python del host | Python 3.11 o posterior; sin dependencias Python de terceros en producción |
-| Permisos | `sudo` para instalar y administrar; no se añade al usuario al grupo `docker` |
-| Red | LAN preferentemente Ethernet; salida a Internet para APT, imágenes, JARs, dependencias y autenticación |
-| Clientes | Java de la versión seleccionada; Bedrock dentro del rango compatible con Geyser |
+| Equipo | Raspberry Pi 5 de 4 GB, alimentación oficial y refrigeración activa |
+| Sistema | Raspberry Pi OS de 64 bits (Debian 12 Bookworm o 13 Trixie). Se recomienda la versión **Lite**: con escritorio quedan menos de 2 GiB libres |
+| Almacenamiento | microSD de 128 GB recomendada; mínimo 8 GiB libres para el proyecto y 4 GiB para Docker |
+| Red | LAN, preferiblemente por cable, y salida a Internet para instalar, descargar versiones y autenticar a los jugadores |
+| Software | Python 3.11 o posterior (viene con el sistema). El instalador añade Docker si falta |
+| Clientes | Java de la versión que fije el instalador (o de otra, gracias a ViaVersion); Bedrock dentro del rango que admita Geyser |
 
-El espacio mínimo comprueba el arranque; no garantiza capacidad para un mundo grande o todas sus copias. Las copias necesitan espacio adicional comparable al tamaño de los datos sin comprimir. No se altera swap, particionado ni firmware.
+Una tarjeta «de 128 GB» no muestra 128 GiB en Linux: el instalador comprueba el espacio realmente disponible. Los backups ocupan aproximadamente lo mismo que el mundo cada uno.
 
-Una microSD de 128 GB comercial no tiene por qué mostrar 128 GiB en Linux. El instalador comprueba espacio utilizable, no el nombre comercial de la tarjeta.
+## 3. Instalación completa, paso a paso
 
-## 3. Descarga e instalación
+Si empiezas con una microSD vacía, la [guía desde cero](docs/INSTALACION_DESDE_CERO.md) explica cómo grabar el sistema, entrar por SSH y hacer las pruebas de persistencia y backup. Los comandos siguientes se ejecutan **en la Pi**.
 
-Para preparar la microSD, habilitar SSH y realizar el primer acceso, sigue [la guía desde cero](docs/INSTALACION_DESDE_CERO.md). Los comandos de esta sección se ejecutan **en la Raspberry Pi**, por SSH o desde su terminal.
+| Paso | Qué haces | Tiempo aproximado |
+| --- | --- | --- |
+| 1 | Ajustes recomendados del sistema y reinicio | 5 min |
+| 2 | Descargar el proyecto | 1 min |
+| 3 | Instalar el servidor | 10–20 min |
+| 4 | Instalar el panel web | 2–10 min |
+| 5 | Primer acceso: contraseña, whitelist y operador | 5 min |
+| 6 | Opcional: pregenerar el mundo y fijar su borde | ~25 min |
+| 7 | Auditoría y prueba de juego | 10 min |
 
-### Opción A: descargar con Git — recomendada
+### 3.1 Ajustes recomendados del sistema
 
-En una instalación nueva:
+Raspberry Pi OS arranca con el cgroup de memoria desactivado. Sin él, Docker ignora el límite de 3 GiB del contenedor. Actívalo **antes de instalar**: si lo haces después, habrá que recrear el contenedor una vez (ver [§12](#12-configuración-y-memoria)).
+
+```bash
+sudo cp /boot/firmware/cmdline.txt /boot/firmware/cmdline.txt.bak     # copia del original
+grep -q cgroup_enable=memory /boot/firmware/cmdline.txt || \
+  sudo sed -i '1 s/$/ cgroup_enable=memory/' /boot/firmware/cmdline.txt  # al final de su única línea
+sudo systemctl set-default multi-user.target                           # opcional: arrancar sin escritorio
+sudo reboot
+```
+
+Tras el reinicio, `grep -w memory /sys/fs/cgroup/cgroup.controllers` debe mostrar `memory`. Para deshacerlo, restaura `cmdline.txt.bak`; para volver al escritorio, `sudo systemctl set-default graphical.target`.
+
+### 3.2 Descargar el proyecto
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git python3 ca-certificates iproute2
 sudo git clone https://github.com/Vgarcan/Craft_Pi_server.git /opt/minecraft-lan-installer
 cd /opt/minecraft-lan-installer
-sudo chmod +x install.sh manage.sh tests/run.sh docker/entrypoint.sh
-sudo ./install.sh --check
 ```
 
-El directorio `/opt/minecraft-lan-installer` debe ser nuevo. Si ya contiene una instalación, utiliza sus comandos de administración y conserva un backup antes de cambiar código. Los mundos y las configuraciones generadas no se guardan en Git.
+El proyecto debe estar en una carpeta de root, como `/opt/minecraft-lan-installer`, y descargarse con `sudo`. El panel ejecuta su helper con una regla sudo y exige que todo su código pertenezca a root.
 
-### Opción B: descargar ZIP sin Git
-
-Desde la página del repositorio selecciona **Code → Download ZIP**, o descarga [el código de la rama main](https://github.com/Vgarcan/Craft_Pi_server/archive/refs/heads/main.zip).
-
-También puedes descargarlo directamente en la Pi:
+**Sin Git:** descarga el [ZIP de la rama main](https://github.com/Vgarcan/Craft_Pi_server/archive/refs/heads/main.zip) y comprueba su contenido:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y curl unzip python3 ca-certificates iproute2
-curl --fail --location --output /tmp/Craft_Pi_server-main.zip \
-  https://github.com/Vgarcan/Craft_Pi_server/archive/refs/heads/main.zip
+sudo apt-get install -y curl unzip
+curl --fail --location --output /tmp/Craft_Pi_server-main.zip https://github.com/Vgarcan/Craft_Pi_server/archive/refs/heads/main.zip
 sudo unzip /tmp/Craft_Pi_server-main.zip -d /opt
 sudo mv /opt/Craft_Pi_server-main /opt/minecraft-lan-installer
 cd /opt/minecraft-lan-installer
-sudo chmod +x install.sh manage.sh tests/run.sh docker/entrypoint.sh
-sudo ./install.sh --check
+sudo chmod +x install.sh manage.sh panel/install.sh tools/audit.sh tests/run.sh docker/*.sh
+sha256sum -c --quiet MANIFEST.sha256 && echo 'Archivos íntegros'
 ```
 
-Usa esta opción sólo si **ninguno** de esos dos directorios de destino existe. No descomprimas encima de una instalación: un ZIP de GitHub incluye el sufijo `-main` en su carpeta raíz.
+`MANIFEST.sha256` lista el SHA-256 de cada archivo del repositorio. No descomprimas encima de una instalación existente: la carpeta de destino debe ser nueva.
 
-El paquete original `Minecraft-LAN-Server-Installer.zip` tiene otra estructura: ya contiene `minecraft-lan-installer/` y no necesita ese cambio de nombre. La guía desde cero distingue ambos paquetes.
+### 3.3 Instalar el servidor
 
-### Comprobar e instalar
-
-`--check` no instala paquetes ni inicia contenedores. Comprueba el host, su IP y el acceso HTTPS a las fuentes. Si tienes varias interfaces o direcciones, indica la que deben usar los jugadores:
+Primero comprueba el sistema sin instalar nada. Si la Pi tiene varias direcciones, indica la que usarán los jugadores:
 
 ```bash
 sudo ./install.sh --check --lan-ip 192.168.1.50
@@ -107,431 +126,245 @@ sudo ./install.sh --check --lan-ip 192.168.1.50
 Lee la [EULA de Minecraft](https://www.minecraft.net/eula). Si la aceptas:
 
 ```bash
-sudo ./install.sh --accept-eula --lan-ip 192.168.1.50
+sudo ./install.sh --accept-eula --lan-ip 192.168.1.50 --contact https://github.com/TU_USUARIO
 ```
 
-**Sustituye `192.168.1.50` por la IP real de la Pi.** Si sólo hay una dirección candidata, puedes omitir `--lan-ip`. La versión de Minecraft se determina al instalar; no se mantiene en `latest` al arrancar.
+- **Sustituye `192.168.1.50` por la IP real de la Pi** (`ip -4 addr`). Si sólo hay una candidata, puedes omitir `--lan-ip`.
+- `--contact`, una URL o un email, va en el `User-Agent` que exige la API de Paper.
 
-Paper exige un `User-Agent` identificable con contacto. El ejemplo utiliza `https://github.com/Vgarcan`; puedes sustituirlo por tu URL o email:
+La instalación:
+1. Elige la versión de Minecraft que soporta Geyser y el build estable de Paper correspondiente.
+2. Fija Geyser, Floodgate, BlueMap, Chunky, ViaVersion y ViaBackwards por SHA-256.
+3. Instala Docker si falta y construye la imagen.
+4. Compila MclanSkins en un contenedor sin red.
+5. Genera el mundo, arranca y verifica.
+
+No apagues la Pi mientras trabaja. El primer arranque admite 900 s (`--timeout` hasta 7200).
+
+### 3.4 Instalar el panel web
 
 ```bash
-sudo ./install.sh --accept-eula --contact https://github.com/Vgarcan
+sudo panel/install.sh
 ```
 
-Se solicita aceptación explícita de la EULA en la primera instalación. Ninguna prueba ni parámetro acepta contratos por ti.
+Crea el usuario sin privilegios `mclan-panel`, un certificado autofirmado para la IP, la regla sudo limitada al helper y el servicio `mclan-panel`. También extrae del cliente de Minecraft las texturas y el catálogo de objetos.
 
-Después de instalar, comprueba el estado y los registros:
+En una instalación nueva BlueMap descarga ese cliente unos minutos después del primer arranque: el script **espera hasta 10 minutos** (`MCLAN_ASSETS_WAIT=SEGUNDOS` para cambiarlo). Si aun así no está, el panel funciona con su estilo CSS y basta con repetir `sudo panel/install.sh` más tarde.
+
+Al terminar imprime la dirección (`https://IP_DE_LA_PI:8443/`) y la **huella SHA-256 del certificado**. Compárala con la que muestre el navegador antes de aceptar el aviso de certificado autofirmado.
+
+### 3.5 Primer acceso, whitelist y operador
 
 ```bash
-sudo ./manage.sh status
-sudo ./manage.sh logs --tail 100
-sudo ./manage.sh verify
+sudo cat /etc/mclan-panel/initial-password
 ```
 
-Conecta después un cliente Java y uno Bedrock con la IP y versiones indicadas. La comprobación automática local no sustituye esa prueba de juego.
+1. Entra en el panel con esa contraseña y cámbiala en **Account**. Si la olvidas: `sudo panel/install.sh --reset-password`.
+2. La whitelist está activa desde el principio: nadie puede entrar hasta que lo añadas. En **Players → Add a player**:
+   - **Java:** el nombre de la cuenta.
+   - **Bedrock:** el gamertag sin espacios, o su XUID.
+   - **Bedrock con «Floodgate does not know»:** pide al jugador que intente entrar una vez y usa **Open 5 min and wait** en su intento rechazado. La whitelist se abre hasta que entra, lo añade y se vuelve a cerrar.
+3. Abre tu perfil (Players → tu nombre) y usa **Actions → Admin → Make operator** para tener permisos de operador en el juego.
 
-No cierres la alimentación mientras descarga, genera el mundo o guarda datos. El tiempo máximo inicial es 900 segundos; puedes aumentarlo hasta 7200 con `--timeout`. Si falla, conserva los mensajes y usa la guía de diagnóstico.
+Los jugadores Bedrock aparecen con un punto delante (`.Gamertag`): es el prefijo de Floodgate.
 
-## 4. Arquitectura y archivos
+Desde la terminal también puedes hacerlo:
 
-Un único contenedor ejecuta **Paper**. **Geyser-Spigot** y **Floodgate-Spigot** son plugins de esa misma JVM, no servidores Bedrock independientes.
+```bash
+sudo ./manage.sh command "whitelist add NOMBRE_JAVA"
+sudo ./manage.sh command "fwhitelist add GAMERTAG"
+sudo ./manage.sh command "op NOMBRE"
+```
 
-| Tráfico o dato | Recorrido |
-| --- | --- |
-| Cliente Java | IP LAN de la Pi, TCP 25565 → Paper |
-| Cliente Bedrock hasta 26.5x (RakNet) | IP LAN de la Pi, UDP 19132 → Geyser → Paper, autenticado por Floodgate |
-| Cliente Bedrock 26.60+ (NetherNet) | Signaling HTTP en TCP 19132, juego WebRTC en UDP 19133 → Geyser → Paper |
-| Administración | `manage.sh` → Docker Compose; RCON sólo dentro del contenedor |
-| Mundos y jugadores | `data/` del host → `/data` del contenedor |
-| Binarios fijados | `releases/<id>/` del host → `/opt/release` en sólo lectura |
-| Logs de operaciones | `logs/operations.log`, con rotación |
-| Logs del servidor | Docker con rotación y registros propios de Paper en `data/logs/` |
+### 3.6 Opcional: pregenerar el mundo y fijar su borde
 
-El contenedor sólo publica, en la IP LAN, los puertos del juego (TCP 25565, UDP 19132, TCP 19132 y UDP 19133) y la web del mapa (TCP 8100). El panel web es un servicio aparte del host en TCP 8443. **RCON 25575 no se publica en el host.** No se monta el socket Docker en el contenedor.
+Generar terreno mientras se juega causa tirones en la Pi, y el mapa queda incompleto. Con [Chunky](https://hangar.papermc.io/pop4959/Chunky), incluido en la release, puedes generar de antemano un cuadrado alrededor del spawn y poner ahí el borde del mundo. Desde **Console** en el panel:
 
 ```text
-minecraft-lan-installer/
-  install.sh                       Entrada de instalación
-  manage.sh                        Entrada de administración
-  docker/
-    Dockerfile                     JVM Temurin ARM64 + Python para sondas
-    compose.template.yaml          Plantilla versionada
-    entrypoint.sh                  Arranque y sustitución de los dos plugins gestionados
-    probe.py                       Java Status, RakNet y RCON
-  docs/ESTADO.md                   Estado por fases: implementado frente a verificado
-  scripts/
-    main.py                        Entrada Python común
-    mclan/                         Host, versiones, runtime, backups, CLI y utilidades
-  config/settings.example.json     Ejemplo de opciones
-  docs/                            Guía inicial, recuperación y validación
-  tests/                           Pruebas y fixtures de contrato de API
+chunky spawn
+chunky shape square
+chunky radius 1600
+chunky start
+worldborder center SPAWN_X SPAWN_Z
+worldborder set 3200
 ```
 
-Durante la instalación se crean `compose.yaml`, `.env`, `config/settings.json`, `state/`, `releases/`, `data/`, `backups/` y `logs/`.
+- **Centro del borde:** pon el mismo centro que Chunky, es decir, las coordenadas X y Z del spawn, que ves en el perfil de cualquier jugador (Teleport → World spawn).
+- **Tamaño:** un radio de 1600 (3200 × 3200 bloques) tarda unos 25 minutos en la Pi 5 y ronda los 70 °C con refrigeración activa.
+- **Progreso:** sigue en World o con `chunky progress`.
+- **Para ampliar:** pregenera un radio mayor y sube el borde.
 
-`install.sh` y `manage.sh` son entradas Bash pequeñas y comentadas. La lógica se comparte en módulos Python de biblioteca estándar: así se puede probar sin ejecutar APT ni Docker. **Python pertenece al host y a las sondas; Minecraft sigue ejecutándose en Java.**
+### 3.7 Auditoría y prueba de juego
 
-No muevas el directorio mientras el servicio esté activo. Los bind mounts se resuelven contra la ruta estable del proyecto.
+```bash
+sudo tools/audit.sh --verify
+```
 
-## 5. Cómo instala y selecciona versiones
+Revisa en modo lectura arranque, límite de memoria, contenedor, puertos (sólo en la IP LAN), NetherNet, cada plugin, MclanSkins, panel (servicio, regla sudo, texturas y catálogo), whitelist, recursos y backups. Termina con «sin fallos», o con un código de salida 1 si hay algún FALLO. La misma auditoría está en el panel, en **Health**.
 
-La primera instalación sigue esta secuencia:
+Después conecta un Java y un Bedrock ([§4](#4-conectarse-a-jugar)). La [guía desde cero](docs/INSTALACION_DESDE_CERO.md) incluye una prueba de persistencia, reinicio y restauración que conviene hacer antes de tomarte el mundo en serio.
 
-1. Comprueba OS, ARM64, RAM física/disponible, espacio e IP local. Si la elección de IP es ambigua, exige una dirección explícita.
-2. Consulta las fuentes por HTTPS. Usa la página oficial de compatibilidad para seleccionar la versión Java que Geyser emula.
-3. Exige un build `STABLE` de Paper para esa misma versión. Obtiene el Java mínimo desde la API de Paper. Actualmente contempla Java 21 y 25; otros valores producen un error explícito.
-4. Fija versiones y builds concretas de Geyser y Floodgate. Descarga los JARs y comprueba sus SHA-256 publicados. Una publicación de Geyser durante la resolución cancela el intento para evitar mezclar estados.
-5. Si Docker falta, prepara su repositorio oficial de Debian y sólo solicita paquetes necesarios. Conserva un Engine existente. Si faltan Compose o Buildx, busca sus plugins compatibles. No ejecuta `curl | sh`, un `apt upgrade` general ni elimina paquetes en conflicto.
-6. Comprueba que el contexto Docker sea el socket local del sistema, activa el servicio Docker y verifica su arquitectura.
-7. Descarga Temurin ARM64, fija su digest y construye la imagen local. El identificador de imagen incorpora el digest y los hashes de Dockerfile, entrada y sonda.
-8. Lee `CONFIG_VERSION` del `.class` dentro del JAR de Geyser **sin ejecutarlo en el host**. El esquema contemplado es el **10**; uno distinto requiere revisión y detiene la instalación.
-9. Crea configuración sólo si falta. Genera `compose.yaml`, comprueba `docker compose config --quiet`, arranca y realiza las verificaciones descritas arriba.
+## 4. Conectarse a jugar
 
-La evidencia documental anterior no sustituye el ensayo de arranque. Floodgate no publica una matriz universal que permita demostrar toda compatibilidad mediante números: se comprueba además su carga efectiva y la autenticación configurada en la instancia real. El acceso de jugadores se confirma con la prueba manual LAN.
-
-`state/active.json` y `releases/<id>/versions.lock.json` conservan builds, URLs, hashes, versión de Minecraft, Java, digest, fuentes de compatibilidad y versión de esquema. Los snapshots conservan estos datos y todos los JARs gestionados.
-
-**Idempotencia:** repetir `install.sh` sobre una instalación activa no consulta `latest`, no sustituye la configuración ni vuelve a crear el mundo. Comprueba y arranca la release ya fijada. Las actualizaciones necesitan `manage.sh update`.
-
-`data/` con contenido y sin metadatos gestionados se rechaza. No existe importación implícita de servidores anteriores. Un intento inicial incompleto conserva su marca `state/installing.json` para poder repetirlo sin truncar configuraciones.
-
-## 6. Conexión Java y Bedrock
-
-**Java, Windows/macOS/Linux:** usa la versión que muestra el instalador. Multijugador → Añadir servidor → `IP_DE_LA_PI:25565`. Se mantiene la autenticación normal de Java: necesitas una cuenta y licencia Java válidas.
-
-**Java de otras versiones (p. ej. QuestCraft en Meta Quest):** desde la 0.6.2 el servidor lleva **ViaVersion** y **ViaBackwards**, resueltos en Hangar como BlueMap y Chunky (última Release que declara la versión exacta de Paper, con SHA-256 fijado). Permiten entrar con clientes Java más antiguos (ViaBackwards admite hasta la 1.10) o algo más nuevos que la versión del servidor. El servidor y el mundo no cambian de versión. Los bloques y objetos que no existen en la versión del cliente se muestran con un sustituto. Si el cliente es demasiado antiguo, la lista de servidores sigue mostrando la versión en rojo.
-
-**Bedrock, dispositivos con la opción de añadir un servidor externo:** Jugar → Servidores → Añadir servidor → nombre libre, dirección `IP_DE_LA_PI`, puerto `19132`. La cuenta/autenticación Bedrock se mantiene; Floodgate permite entrar sin comprar además la edición Java.
-
-**Skins de Bedrock.** Floodgate aplica por defecto a cada jugador Bedrock la conversión Java de su skin, hecha por la API de GeyserMC. Java sólo admite el cuerpo humano estándar en 64×64, así que una skin con forma propia queda «aplanada». Además, Geyser manda esa conversión también a los clientes Bedrock. Desde la 0.7.0, el addon propio **MclanSkins** (`addons/mclan-skins`) cancela esa aplicación:
-
-- **Jugadores Java:** ven la skin por defecto (Steve/Alex).
-- **Jugadores Bedrock:** ven la skin Bedrock **completa**, también la propia: skins persona (creador de personajes) con sus piezas y tintes, animaciones de cara, geometría propia y cualquier tamaño hasta 512×512. Geyser las reconstruye con sólo imagen, geometría y brazos, y el cliente rechaza el resultado. El addon guarda al iniciar sesión la skin que firmó el cliente y la pone en cada entrada de la lista de jugadores que Geyser envía a los clientes Bedrock, como hace el servidor oficial de Bedrock. Para eso sustituye la salida de cada sesión de Geyser por una subclase. Si una build futura lo impide, el addon lo avisa en el log y Bedrock recibe las skins de Geyser.
-- **Que Java vea la conversión:** `java-skin: converted` en `data/plugins/MclanSkins/config.yml` y reiniciar. Bedrock sigue viendo la skin completa.
-- **Cambiar de skin:** se aplica al volver a conectar. Geyser no traduce los cambios de skin en mitad de la partida.
-- **Compilación:** `manage.sh update` lo compila en la Pi, contra las librerías exactas de la release (`paper-api` incluida en `paper.jar` y la API de Floodgate), en un contenedor `eclipse-temurin:<java>-jdk-jammy` fijado por digest y sin red. El hash del código forma parte de la identidad de la release.
-
-Algunas consolas restringen la introducción de servidores personalizados. Por tanto, **multiplataforma no significa conexión directa garantizada desde cualquier Xbox, PlayStation o Switch**. Prueba inicialmente con Bedrock de Windows o un móvil/tableta que admita añadir servidores.
-
-No se garantiza la detección automática en la pestaña LAN: Docker usa una red bridge. Introduce la dirección manualmente. Java y Bedrock necesitan estar en la misma red con comunicación entre clientes habilitada; una Wi-Fi de invitados puede aislarlos.
-
-**NetherNet.** Bedrock deja RakNet a partir de la versión 26.60, anunciada por GeyserMC para el 27 de octubre de 2026. Desde la 0.2.0 Geyser funciona con `transport: both`: RakNet sigue en UDP 19132 para los clientes actuales, y NetherNet usa signaling HTTP en TCP 19132 y WebRTC en UDP 19133. Los jugadores siguen introduciendo la misma dirección y el puerto `19132`.
-
-- Los valores se fijan en `compose.yaml` mediante las propiedades JVM `geyserTransport`, `geyserWebrtcPort` y `geyserAdvertiseAddresses`, que **prevalecen** sobre `plugins/Geyser-Spigot/config.yml`. La dirección anunciada es la IP LAN fijada; `rebind` la actualiza.
-- La identidad del servidor NetherNet se guarda en `data/plugins/Geyser-Spigot/nethernet/` y forma parte de los backups. Si se pierde, cada jugador debe volver a confirmar el servidor.
-- El signaling integrado usa HTTP sin TLS. Según GeyserMC, quien conecta por IP verá una confirmación de confianza la primera vez (*trust on first use*). No se instala certificado ni proxy en este alcance.
-- **Pendiente de hardware:** el transporte NetherNet sólo podrá probarse con un cliente 26.60 real y con una build de Geyser que soporte esa versión. Ejecuta `manage.sh update --plan` cuando se publique.
-
-Geyser necesita acceso a Internet al arrancar para obtener datos de autenticación de Microsoft/Mojang. Sin red, Paper arranca pero Geyser se desactiva y Bedrock no conecta.
-
-## 7. Administración
-
-Ejecuta desde la carpeta del proyecto, o utiliza la ruta absoluta al script. `sudo` es intencionado: acceso al grupo Docker equivale a privilegios elevados sobre el host.
-
-| Comando | Resultado |
+| Cliente | Cómo |
 | --- | --- |
-| `sudo ./manage.sh start` | Arranca y verifica; rechaza operaciones incompletas |
-| `sudo ./manage.sh stop` | Solicita cierre con hasta 180 segundos de gracia; comprueba evidencia de guardado |
-| `sudo ./manage.sh restart` | Cierre y arranque verificado |
-| `sudo ./manage.sh status` | Estado Docker y release activa; no sustituye `verify` |
-| `sudo ./manage.sh logs --tail 150` | Últimas líneas del servidor |
-| `sudo ./manage.sh logs --follow` | Sigue registros; Ctrl+C termina la consulta, no el servidor |
-| `sudo ./manage.sh verify --timeout 900` | Verificación de servicios y protocolos locales |
-| `sudo ./manage.sh backup` | Backup completo con parada temporal |
-| `sudo ./manage.sh restore backups/ARCHIVO.tar.gz` | Restauración confirmada y verificada |
-| `sudo ./manage.sh update --plan` | Resuelve y muestra la propuesta de versiones |
-| `sudo ./manage.sh update` | Actualiza builds compatibles, con confirmación y backup |
-| `sudo ./manage.sh rebind 192.168.1.60` | Cambia la IP publicada tras confirmación; útil si cambia DHCP |
-| `sudo ./manage.sh command "list"` | Envía un comando de consola tras confirmar `EJECUTAR` |
-
-Los comandos de consola tienen permisos administrativos. No pongas contraseñas ni tokens en sus argumentos. `stop`, `restart` y `reload` no se envían por esa entrada: usa los comandos de administración correspondientes.
-
-Sólo una operación que modifica estado puede ejecutarse a la vez. `status` y `logs` quedan disponibles mientras se trabaja. `verify` se bloquea también porque genera temporalmente un diagnóstico offline.
-
-## 8. Backups y restauración
-
-```bash
-sudo ./manage.sh backup
-sudo ./manage.sh restore backups/minecraft-FECHA-manual.tar.gz
-```
-
-`backup` detiene el servidor si estaba en marcha, espera cierre limpio, crea y lee de nuevo el archivo para comprobar **todos los hashes**, y vuelve a iniciar sólo si estaba funcionando. Si estaba parado, permanece parado.
-
-Se exige evidencia de guardado en los logs de ese arranque: el mensaje vanilla `All dimensions are saved` o, en Paper 26.x con Moonrise, la secuencia `Saving worlds` → `Halted I/O scheduler for world` → `All RegionFile I/O tasks to complete`, en ese orden. Paper 26.3 ya no escribe el mensaje vanilla, y la 0.1.0 rechazaba todos los backups por ello. Se acepta salida JVM `0` o `143` con esa evidencia; un OOM, SIGKILL, otro código o falta de evidencia impide presentar una copia como consistente. Si un cambio de Paper modifica estos mensajes, habrá que revisar el comprobador.
-
-El archivo contiene mundos, jugadores, configuración, EULA, datos y claves de plugins, metadatos, Compose, `.env` y los JARs de la release activa. No contiene la imagen Docker completa, todo el historial de releases, las herramientas del sistema ni los registros de operaciones externos a `data/`.
-
-Al recuperar en otro host puedes indicar `restore RUTA --lan-ip NUEVA_IP_LOCAL`; la IP debe estar asignada a ese host.
-
-`backups/` utiliza permisos restrictivos. **Las copias contienen la clave de Floodgate y la contraseña de RCON**; no las subas a un repositorio. Se añade un SHA-256 del archivo comprimido y un manifiesto interno con hashes y tamaños por archivo.
-
-Restaurar pide escribir **`RESTAURAR`**. Primero valida y extrae a una carpeta temporal, rechazando rutas absolutas, `..`, enlaces, dispositivos, duplicados y contenido que no corresponda al manifiesto. Comprueba también los JARs y el formato de la release antes de sustituir el mundo.
-
-Si el estado actual permite un backup consistente, crea una copia `pre-restore`. Si proviene de un cierre anómalo o una operación fallida, conserva su directorio íntegro como `state/pre-restore-...` para inspección, sin etiquetarlo como copia consistente. El mundo anterior no se borra antes de disponer de un estado preservado.
-
-Una interrupción deja `state/operation.json`. Los arranques ordinarios se bloquean hasta completar una restauración. Si una actualización ya abrió el mundo, se restaura **el snapshot completo**, no sólo un JAR antiguo: los formatos de mundo no admiten un downgrade seguro genérico.
-
-Guarda periódicamente el archivo y su `.sha256` fuera de esa microSD. Una copia en la misma tarjeta ayuda ante errores de operación; no resuelve la pérdida de la tarjeta. No hay purga automática ni backup programado en este alcance.
-
-La guía [RECUPERACION.md](docs/RECUPERACION.md) describe fallos y restauración tras reinstalar el sistema.
-
-## 9. Actualizaciones
-
-```bash
-sudo ./manage.sh update --plan
-sudo ./manage.sh update
-```
-
-Por defecto conserva la versión Minecraft del mundo y sólo considera builds compatibles. Si Geyser ya exige otra versión Java, **se detiene**: no añade ViaVersion ni cambia la versión del mundo automáticamente.
-
-Para revisar explícitamente una subida de Minecraft:
-
-```bash
-sudo ./manage.sh update --plan --minecraft-version auto
-sudo ./manage.sh update --minecraft-version auto
-```
-
-La segunda orden pide escribir **`ACTUALIZAR`**. Descarga y construye antes de parar el servidor; después crea el snapshot `pre-update`, activa la nueva release y verifica si estaba en marcha. Si estaba parado, permanece parado y la verificación queda pendiente del siguiente arranque.
-
-Si la verificación falla, detiene la nueva instancia y conserva la marca de operación y la ruta del snapshot. No afirma éxito ni intenta abrir un mundo convertido con una versión antigua. Usa `restore` con la copia indicada.
-
-**Actualizar el código del instalador.** `manage.sh update` no descarga cambios de este repositorio; eso se hace con Git. El procedimiento ensayado en hardware para pasar de la 0.1.0 a la 0.2.0 es:
-
-```bash
-cd /opt/minecraft-lan-installer
-sudo ./manage.sh backup
-sudo git pull --ff-only
-sudo ./manage.sh status          # avisa de archivos Docker/Compose nuevos
-sudo ./manage.sh update --plan   # muestra builds y cambios del proyecto
-sudo ./manage.sh update          # pide ACTUALIZAR
-```
-
-Tras el `git pull`, `start` y `restart` se niegan a arrancar con código Docker o plantilla Compose distintos de los de la instalación activa; `status`, `logs` y `stop` siguen disponibles. `update` detecta ese cambio aunque las builds de Paper y los plugins sean las mismas: reconstruye la imagen, para el servidor, crea el snapshot `pre-update`, sustituye `compose.yaml` y verifica.
-
-`compose.yaml` sólo se sustituye si es idéntico a una plantilla publicada por el proyecto (lista `PREVIOUS_TEMPLATES` en `scripts/mclan/runtime.py`). Si lo editaste a mano, `update` se detiene sin tocarlo.
-
-`restore` admite backups creados con una plantilla gestionada anterior o con otros archivos Docker. Restaura datos y builds fijadas, y activa la plantilla y la imagen del proyecto actual.
-
-No actualiza Raspberry Pi OS ni Docker Engine por medio de `manage.sh`. Una release ya fijada reutiliza su digest de JVM. Para renovar sólo la base Java o revisar un esquema nuevo de Geyser se requiere una modificación explícita y validada del proyecto; no hay actualización de seguridad automática de imágenes fijadas.
-
-## 10. Configuración y memoria
-
-| Parámetro | Inicial | Motivo |
-| --- | --- | --- |
-| JVM `-Xms` | 512 MiB | Evita reservar el heap máximo desde el inicio |
-| JVM `-Xmx` | 2048 MiB | Deja espacio para memoria nativa, Geyser y el OS |
-| Límite total del contenedor | 3 GiB | Incluye JVM, memoria nativa, auxiliares y caché contabilizada. **Sólo se aplica con el cgroup de memoria activo**; ver más abajo |
-| Swap del contenedor | Sin margen adicional sobre ese límite | Evita utilizar la SD como ampliación ilimitada de memoria |
-| View distance | 6 chunks | Punto de partida moderado para la Pi |
-| Simulation distance | 4 chunks | Reduce trabajo por tick |
-| Max players | 6 | Límite inicial, **no garantía de rendimiento para seis jugadores** |
-
-**Límite de memoria y Raspberry Pi OS.** El kernel de Raspberry Pi OS arranca con `cgroup_disable=memory`. Entonces Docker descarta `mem_limit` y `memswap_limit` (aviso `Your kernel does not support memory limit capabilities`), y el contenedor sólo queda limitado por el heap de Java y la RAM del host. `status` y el preflight lo advierten. Para activarlo, añade `cgroup_enable=memory` al final de la única línea de `/boot/firmware/cmdline.txt`, conserva una copia del archivo original y reinicia. Comprueba después que `/sys/fs/cgroup/cgroup.controllers` incluye `memory`. Un contenedor creado antes del cambio conserva `Memory=0` aunque se reinicie: recréalo una vez con `sudo ./manage.sh stop`, `sudo docker compose --project-name minecraft-lan rm -f minecraft` (desde el directorio del proyecto) y `sudo ./manage.sh start`. Los datos están en `data/` y no se pierden. Es un cambio del host: el instalador no lo aplica por su cuenta.
-
-`sudo tools/audit.sh` revisa en modo lectura el arranque, el límite de memoria, el contenedor, los puertos, NetherNet, la whitelist, los recursos y los backups. Con `--verify` añade la verificación de protocolos. Sale con código 1 si hay algún FALLO.
-
-Con escritorio gráfico (`graphical.target`) quedan menos de 2 GiB disponibles con el servidor en marcha. El perfil previsto es OS Lite.
-
-La configuración es un punto de partida conservador, no un benchmark. Prueba primero con 2–4 jugadores y vigila CPU, temperatura, memoria y generación de chunks. No se han medido TPS ni rendimiento en este equipo. Los mapas o plugins adicionales pueden cambiar mucho el consumo.
-
-Para cambiar dificultad, MOTD, distancias o jugadores:
-
-```bash
-sudo ./manage.sh stop
-sudo nano data/server.properties
-sudo ./manage.sh start
-```
-
-Conserva `online-mode=true`, `enforce-secure-profile=false`, `enable-status=true`, RCON interno y los puertos previstos: el validador comprueba estos valores. `enforce-secure-profile=false` permite el acceso cruzado sin exigir a Bedrock un perfil firmado de Java; no desactiva la autenticación online de Java.
-
-El instalador crea la configuración Geyser sólo cuando falta y conserva la clave de Floodgate generada por el plugin. El diagnóstico efectivo, no sólo el contenido escrito, confirma el modo de autenticación.
-
-Los dos JARs con nombres `Geyser-Spigot.jar` y `floodgate-spigot.jar` están reservados al instalador. El entrypoint los sincroniza desde la release fijada en cada arranque: copia a un archivo temporal y renombra, porque la copia queda en modo `0400` y no se podría sobrescribir. No añadas otra copia de estos plugins con otro nombre.
-
-`compose.yaml` es una copia gestionada de `docker/compose.template.yaml`; el validador rechaza divergencias, sin sobrescribirlas. Para un cambio deliberado de memoria, realiza backup, para el servicio, modifica ambos archivos de forma idéntica y conserva esa versión del proyecto con sus backups. `.env` se genera a partir del estado: para cambiar IP usa `rebind`.
-
-## 11. Red y arranque automático
-
-Se publican TCP 25565, UDP 19132, TCP 19132, UDP 19133 y TCP 8100 (mapa) **en la IPv4 LAN seleccionada**; el panel escucha en TCP 8443 de esa misma IP. No se usa `0.0.0.0` en el host ni se publica IPv6. Dentro del contenedor, Geyser escucha en `0.0.0.0`, que pertenece a su red aislada.
-
-El instalador no entra al router, no crea port forwarding, no usa UPnP y no modifica las reglas del firewall del host. **Docker sí gestiona sus reglas de red** para publicar puertos; esto puede interactuar con UFW/firewalld. Una publicación en una IP local no equivale por sí misma a una ACL por subred: equipos de redes enrutadas que ya puedan alcanzar esa IP podrían acceder. Consulta la documentación Docker de firewall si tu red requiere restricciones adicionales.
-
-La IP queda fijada en el estado para evitar publicar accidentalmente en otra interfaz. Si cambia DHCP, usa `rebind` con la nueva dirección que realmente figure en `ip -4 addr`. Una reserva DHCP manual es opcional, no un paso del instalador. Tras un reinicio con otra IP, Docker puede no poder publicar los puertos hasta que se corrija.
-
-Docker se habilita con systemd y el servicio usa `restart: unless-stopped`. Si estaba en marcha, arrancará con Docker después de reiniciar el host. **Una parada manual se respeta**, incluso después de reiniciar; para reactivarlo usa `manage.sh start`.
-
-Un contenedor `unhealthy` no se reinicia sólo por ese estado: esa política actúa al terminar el proceso. No se oculta esa diferencia con un watchdog no solicitado. Un OOM hace salir a Java y permite aplicar la política de reinicio; los logs y la verificación detectan reinicios repetidos.
-
-## 12. Diagnóstico
-
-| Síntoma | Comprobación y acción |
-| --- | --- |
-| ARM64 rechazado | `uname -m` y `dpkg --print-architecture`; reinstala Lite **64 bits** si el usuario es `armhf` |
-| OS no contemplado | Utiliza una imagen Bookworm/Trixie de Raspberry Pi OS Lite; no fuerces la detección |
-| Varias IP candidatas | `ip -4 addr`; usa `--lan-ip` en la instalación o `rebind` después |
-| Puerto ocupado | `sudo ss -ltnup`; comprueba qué proceso utiliza 25565/TCP, 19132/UDP, 19132/TCP o 19133/UDP |
-| Bucle de reinicio con `cp: cannot create regular file '/data/plugins/Geyser-Spigot.jar': Permission denied` | Fallo de la 0.1.0. Actualiza a la 0.2.0 (`git pull` y `manage.sh update`). Mientras tanto: `stop`, borrar sólo esos dos JAR de `data/plugins/` y `start` |
-| `start` pide ejecutar `update` | Hiciste `git pull` y el proyecto trae código Docker o Compose nuevo; sigue el procedimiento de la sección 9 |
-| Aviso `NetherNet support is NOT enabled` | Instalación 0.1.0; tras actualizar no debe aparecer. `logs` debe mostrar `Built-in signaling started on` |
-| Jugador rechazado con `You are not whitelisted` | `white-list=true` en `server.properties`. Añádelo con `manage.sh command "whitelist add NOMBRE"` (Java) o `"fwhitelist add NOMBRE"` (Bedrock vía Floodgate) |
-| Docker existe pero no responde | `sudo systemctl status docker`; comprueba espacio y contexto local |
-| Paquetes Docker en conflicto | El script no los elimina: revisa qué servicios dependen de ellos antes de resolverlo manualmente |
-| Fallo HTTP, DNS o TLS | Revisa fecha/hora (`timedatectl`), DNS, acceso a las fuentes y proxy; no desactives TLS |
-| Falta build estable compatible | Espera una pareja compatible o revisa el proyecto; no cambia de versión por su cuenta |
-| Cambió la página o esquema Geyser | El parser falla de forma explícita; actualiza el soporte y sus pruebas, sin saltarte la comprobación |
-| Mundo tarda en generar | Consulta logs; aumenta `--timeout` si sigue progresando y hay recursos |
-| Java conecta, Bedrock no | Comprueba versión Bedrock, Geyser/Floodgate, UDP, aislamiento Wi-Fi y que el cliente admita añadir servidor |
-| No aparece como LAN | Introduce IP y puerto manualmente |
-| Sale OOM o reinicia | `sudo docker stats --no-stream`; reduce distancias/carga y revisa memoria disponible del host |
-| Backup no confirma guardado | Revisa logs del cierre; no borres datos ni fuerces la etiqueta de copia consistente |
-| Restauración bloqueada por operación incompleta | Usa el snapshot íntegro indicado en `state/operation.json`; consulta RECUPERACION.md |
-| Cambió la IP | `sudo ./manage.sh rebind NUEVA_IP` |
-
-Diagnóstico básico:
-
-```bash
-sudo ./manage.sh status
-sudo ./manage.sh logs --tail 200
-sudo docker stats --no-stream
-sudo journalctl -u docker --since '30 minutes ago'
-df -h
-free -m
-vcgencmd measure_temp
-vcgencmd get_throttled
-```
-
-Para ver el error preciso de Compose, sin pegar su configuración completa en un sitio público:
-
-```bash
-sudo docker compose --project-name minecraft-lan --env-file .env -f compose.yaml config --quiet
-```
-
-Los registros de operaciones rotan en `logs/`; Docker limita sus logs a tres archivos de aproximadamente 10 MB. Paper también escribe dentro de `data/logs/`: revisa periódicamente el espacio, pues no se establece aquí una purga adicional de sus archivos.
-
-## 13. Pruebas y desarrollo
-
-```bash
-./tests/run.sh
-```
-
-Incluye sintaxis Bash, compilación Python y pruebas `unittest`. No instala Docker ni ejecuta APT. Usa temporales, fixtures y dobles de Docker; las sondas se prueban además contra sockets TCP/UDP locales reales que simulan respuestas del protocolo.
-
-Para exigir ShellCheck:
-
-```bash
-sudo apt-get install shellcheck
-./tests/run.sh --strict
-```
-
-El instalador valida el Compose generado mediante el plugin Compose real del host. Las pruebas automatizadas comprueban preservación del mundo, checksums, rechazo de enlaces/traversal, restauración, bloqueos, compatibilidad y fallos de actualización. El informe de validación distingue lo ejecutado aquí de la prueba pendiente en ARM64.
-
-Antes de actualizar fixtures o ampliar compatibilidad, conserva una copia de las respuestas oficiales, revisa los esquemas y ajusta pruebas. Un fixture no representa un servidor Minecraft funcionando.
-
-## 14. Fuentes y decisiones
-
-Fuentes revisadas el **18 de octubre de 2026**. El instalador vuelve a consultar las fuentes al resolver una instalación o actualización, y conserva la evidencia de esa resolución.
-
-- [Docker Engine en Debian](https://docs.docker.com/engine/install/debian/), [Compose](https://docs.docker.com/compose/install/linux/) y [reinicio de contenedores](https://docs.docker.com/engine/containers/start-containers-automatically/).
-- [Docker y filtrado de puertos](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
-- [API de descargas Paper](https://docs.papermc.io/misc/downloads-service/) y [requisitos Java](https://docs.papermc.io/misc/java-install/).
-- [Preparación de GeyserMC para NetherNet](https://geysermc.org/blog/preparing-for-nethernet) y [configuración de Geyser](https://geysermc.org/wiki/geyser/setup/).
-- [Compatibilidad Geyser](https://geysermc.org/wiki/geyser/supported-versions/), [configuración](https://geysermc.org/wiki/geyser/understanding-the-config/) y [Floodgate](https://geysermc.org/wiki/floodgate/).
-- [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion) y [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards): versiones de cliente admitidas.
-- [Código fuente Geyser](https://github.com/GeyserMC/Geyser): configuración, constante de esquema, diagnóstico y comando `dump offline` contrastados con el commit de la build inspeccionada.
-- [Raspberry Pi Imager](https://www.raspberrypi.com/software/) y [EULA Minecraft](https://www.minecraft.net/eula).
-
-No se redistribuyen JARs, claves, mundos ni imágenes Docker en este paquete. Se descargan desde sus proveedores al instalar. Cada componente conserva sus propias condiciones y licencia. El fijado por digest de Temurin no convierte la reconstrucción en bit a bit reproducible: la capa APT que añade Python obtiene paquetes del repositorio durante la construcción. Se reutiliza la imagen ya construida cuando está disponible.
-
-## 15. Panel web y mapa
-
-### Mapa: BlueMap
-
-Desde la 0.3.0, cada release incluye **BlueMap**, un plugin de Paper dentro del mismo proceso. No es un segundo servidor. Se resuelve en Hangar como la última versión *Release* que declara la versión de Minecraft fijada, y se fija con el SHA-256 publicado, igual que Geyser y Floodgate.
-
-- Mapa 3D y jugadores en vivo en `http://IP_DE_LA_PI:8100/`, sólo en la LAN.
-- `plugins/BlueMap/core.conf` se crea una sola vez con un perfil para la Pi: un hilo de render y métricas desactivadas. Después puedes editarlo; no se sobrescribe.
-- `accept-download: true` acepta la EULA de Minecraft para descargar las texturas del cliente desde Mojang. Sólo se escribe si `eula.txt` ya registra tu aceptación.
-- Los backups no incluyen `data/bluemap/web/maps`: las teselas se regeneran tras un restore.
-- `verify` comprueba que BlueMap está habilitado en Paper. Que su web no responda es sólo un aviso: el mapa es accesorio y no debe tumbar un update.
-- **Paper 26.x y la luz:** Moonrise no deja la luz en el formato que espera BlueMap, y sin ajuste sólo se renderiza la vista lejana: de cerca el mapa se ve negro. `docker/bluemap-setup.sh` activa `ignore-missing-light-data` una vez en cada mapa, marcado con `# craft-pi: light-fix`. Si lo reviertes a mano, se respeta. Corre dentro del contenedor, como su usuario, en cada arranque y en `verify` tras el primero.
-- Si al abrir el mapa sólo ves negro, puede que el navegador conserve en la URL una posición sin terreno generado. Usa el enlace **Ver mapa en el spawn** del panel.
-
-**Consumo.** Desde el panel (Estado → Módulos y consumo) o la terminal:
-
-```bash
-sudo ./manage.sh command "bluemap stop"   # pausa el render al momento; la web sigue
-sudo ./manage.sh command "bluemap start"
-sudo ./manage.sh plugin bluemap off       # retira el plugin y libera su memoria (reinicia)
-sudo ./manage.sh plugin bluemap on
-```
-
-Desactivado, `.env` incluye `DISABLED_PLUGINS=bluemap` y el entrypoint no copia el JAR. En la Pi, el contenedor recién arrancado pasó de unos 1,34 GiB a 1,14 GiB.
-
-Para limitar más el render (por ejemplo `min-inhabited-time` o `render-mask` con radio), edita `plugins/BlueMap/maps/*.conf` con el servidor parado. Consulta la [documentación de BlueMap](https://bluemap.bluecolored.de/wiki/configs/Maps.html).
-
-### Panel web
-
-```bash
-sudo panel/install.sh                  # instalar o actualizar (repetir tras rebind)
-sudo cat /etc/mclan-panel/initial-password
-sudo panel/install.sh --reset-password # nueva contraseña desde la terminal
-sudo panel/install.sh --uninstall
-```
-
-Abre `https://IP_DE_LA_PI:8443/` desde la LAN. Si escribes la dirección sin `https://`, el panel redirige solo. El certificado es autofirmado: el navegador avisará la primera vez. Compara su huella SHA-256 con la que imprime `install.sh` antes de aceptarlo.
-
-Desde la 0.4.0 la interfaz está **en inglés** y tiene un estilo inspirado en Minecraft:
-
-- **Navegación:** la barra de objetos del juego, con teclas 1–9 y rueda del ratón sobre la barra.
-- **Escena:** cielo, nubes y colinas de bloques con parallax.
-- **Componentes:** paneles de inventario, botones de piedra, barra de experiencia y corazones.
-- **Avisos:** con estilo de logro.
-- **Navegación sin recargar** (con JavaScript); todo sigue funcionando sin él.
-- **Tareas en segundo plano:** backups, arranques, cambios de mundo, importaciones y exportaciones ya no abren una página que interrumpe: aparece un aviso «started» y puedes seguir navegando. La bandeja de la cabecera muestra la tarea en curso y, al terminar, un aviso «done!» o «failed» y un contador de no leídas. Al pulsar el aviso o la bandeja se abre el resultado en una ventana; sin JavaScript se sigue usando la página `/job/<id>`.
-
-**Texturas.** Las texturas y el logo son de Mojang. `panel/install.sh` los extrae **en la Pi** del cliente que BlueMap ya descargó, con una lista cerrada (`panel/extract_assets.py`, ejecutado dentro del contenedor), los valida en el host (`panel/install_assets.py`: nombres permitidos, firma PNG, tamaño) y los sirve sólo en la LAN. No forman parte del repositorio. Sin ellas, el panel usa equivalentes en CSS. Las fuentes Pixelify Sans y VT323 son OFL y van en `panel/static/fonts/` con su licencia.
+| **Java** (PC/Mac/Linux) | Multijugador → Añadir servidor → `IP_DE_LA_PI:25565`. Necesita una cuenta Java válida |
+| **Java de otra versión** (QuestCraft, clientes antiguos) | Igual. ViaVersion y ViaBackwards traducen el protocolo desde la 1.10 hasta algo más nuevo que el servidor; el mundo no cambia de versión. Lo que no exista en tu versión se ve con un sustituto |
+| **Bedrock** (móvil, Windows, tableta) | Jugar → Servidores → Añadir servidor → dirección `IP_DE_LA_PI`, puerto `19132`. Floodgate permite entrar sin cuenta Java |
+
+- **Pestaña LAN:** no se garantiza que el servidor aparezca ahí, porque Docker usa una red bridge. Escribe la dirección a mano.
+- **Wi-Fi de invitados:** suele aislar a los clientes entre sí y puede impedir la conexión.
+- **Consolas:** algunas no permiten añadir servidores externos. Multiplataforma no garantiza conexión directa desde Xbox, PlayStation o Switch.
+- **Internet:** Geyser necesita salida a Internet al arrancar para autenticar a los jugadores Bedrock.
+
+**NetherNet.** Bedrock deja RakNet desde la 26.60. Geyser funciona con `transport: both`:
+- RakNet sigue en UDP 19132.
+- NetherNet usa signaling HTTP en TCP 19132 y WebRTC en UDP 19133.
+
+Los jugadores siguen usando la misma dirección y el puerto 19132. Sobre la configuración:
+- Los valores van en `compose.yaml` como propiedades JVM, que prevalecen sobre `config.yml`. La dirección anunciada es la IP LAN; `rebind` la actualiza.
+- La identidad NetherNet del servidor (`data/plugins/Geyser-Spigot/nethernet/`) va en los backups.
+- El signaling usa HTTP sin TLS: la primera vez el cliente pide confirmar el servidor.
+- **Pendiente:** probar con un cliente 26.60 real cuando exista (`manage.sh update --plan`).
+
+## 5. El panel web
+
+`https://IP_DE_LA_PI:8443/`, sólo en tu LAN. Está en inglés y se maneja como el juego: la barra de objetos de abajo es el menú (teclas 1–9 o la rueda del ratón sobre ella). Funciona sin JavaScript; con él, navega sin recargar y avisa de lo que pasa.
 
 | Página (tecla) | Qué permite |
 | --- | --- |
-| Dashboard (1) | Estado y salud (corazones), jugadores conectados, memoria y temperatura en vivo, direcciones de conexión (clic para copiar), acciones y versiones |
-| Players (2) | **Perfiles** de cada jugador conocido (abajo). Whitelist: activar o desactivar; añadir Java, Bedrock (gamertag) o Bedrock por XUID; quitar; **intentos rechazados** de las últimas 72 horas con «Allow» y «Open 5 min and wait»; apertura temporal |
-| World (3) | BlueMap (abrir, pausar o reanudar el render, desactivar o activar), borde del mundo, progreso de Chunky y ajustes de `server.properties` (guardar reinicia) |
-| Console (4) | Terminal con logs en vivo (sin el ruido del healthcheck) y **comandos de juego** con historial (↑↓), autocompletado (Tab) y atajos |
-| Backups (5) | Crear backup y últimas copias |
-| Health (6) | `tools/audit.sh` con OK/WARN/FAIL (los detalles salen en español) |
+| Dashboard (1) | Estado y salud, jugadores conectados, memoria y temperatura en vivo, direcciones para conectarse (clic para copiar), arrancar, parar, reiniciar, backup y versiones |
+| Players (2) | Jugadores conocidos y sus perfiles; whitelist (activar, añadir Java, Bedrock o XUID, quitar); intentos rechazados de las últimas 72 h con **Allow** y **Open 5 min and wait** |
+| World (3) | Biblioteca de mundos, subir mundos, BlueMap (pausar, reanudar, desactivar), borde, progreso de Chunky y ajustes de `server.properties` |
+| Console (4) | Logs en vivo y comandos de juego con historial (↑↓), autocompletado (Tab) y atajos |
+| Backups (5) | Crear backup y ver las copias |
+| Health (6) | La auditoría de `tools/audit.sh` |
 | Live map (7) | BlueMap centrado en el spawn |
-| Account (8) | Cambio de contraseña |
-| Log out (9) | Cerrar sesión |
+| Account (8) | Cambiar la contraseña |
 
-**Perfiles de jugador** (`/players/<uuid>`):
+![Jugadores conocidos y whitelist](docs/images/players.png)
 
-- Ficha: edición, en línea, operador, whitelist, ban y su motivo, UUID y XUID, primera y última conexión, tiempo jugado y modo de juego.
-- Vitales: corazones, hambre, saturación, nivel y barra de experiencia, habilidades.
-- Ubicación actual, punto de reaparición y última muerte, con enlace al mapa en esa posición. Con el jugador conectado, posición y vida se leen en vivo.
-- Inventario en cuadrícula del juego (armadura, mano secundaria, barra rápida) y cofre de ender, con los iconos reales.
-- Estadísticas (distancias, muertes, bajas, daño…) y clasificaciones de bloques minados, mobs abatidos, causas de muerte, objetos fabricados, usados y recogidos.
-- Logros completados (sin recetas).
-- **Acciones**, en una tarjeta con pestañas al estilo del inventario creativo. Las pestañas funcionan sin JavaScript (radios y CSS). Con JavaScript, cada acción avisa con un toast y la página no se mueve.
-  - **Items:** buscador por nombre en inglés o id, con icono real y cantidad de 1 a 64. Atajos de cantidad y objetos populares. Seis kits (Starter, Miner, Builder, Explorer, Farmer, Warrior), niveles de experiencia (+1 a +30, −1 a −10, reset) y vaciar inventario.
-  - **Effects:** 14 efectos (visión nocturna, velocidad, prisa, salto, respiración acuática, resistencia al fuego, invisibilidad, regeneración, fuerza, resistencia, caída lenta, gracia del delfín, brillo, suerte), de 1, 5 o 15 minutos y nivel I o II. Curar, alimentar y quitar efectos.
-  - **Teleport:** spawn, cama o ancla de reaparición, última muerte (con 30 s de resistencia V, resistencia al fuego y caída lenta; nunca al vacío), ir a otro jugador, traerlo, o coordenadas. Si se deja Y vacío, va a la superficie (sólo en el Overworld).
-  - **Fun:** fuegos artificiales, «Thunderclap» (sólo sonido y chispas: un rayo real quemaría bloques), mascota ya domesticada (lobo, gato o loro) y encantar el objeto de la mano con 40 encantamientos, hasta su nivel máximo.
-  - **Message:** chat (`[Server]` en dorado), título grande o texto sobre la barra. Hasta 100 caracteres imprimibles en una línea.
-  - **Admin:** operador, whitelist, ban y unban, modo de juego y kick.
-  - **Sin conexión** sólo funciona Admin; el resto se desactiva y lo explica.
-  - Sólo sobre jugadores conocidos, con nombres y valores validados por el helper (`panel/catalog.py` tiene las listas cerradas). Todo queda en `logs/operations.log`.
-- **API JSON** que usa la propia interfaz: `POST /api/players/<uuid>/action` con `{"do": acción, ...campos}`, la sesión, el token CSRF en `X-CSRF-Token` y el mismo `Origin`. Responde `{"ok", "message", "output"}` o `{"ok": false, "error"}`. Acciones y campos: `catalog.FIELDS`. Ejemplo: `{"do": "give", "item": "diamond_sword", "count": 1}`. `GET /api/items` devuelve el catálogo `[id, nombre, icono]`.
-- **Catálogo de objetos:** `panel/install.sh` lo extrae del cliente de Minecraft junto con las texturas (`assets/minecraft/items/` y `lang/en_us.json`) y `install_assets.py` lo valida. Sin catálogo, el panel acepta cualquier id con formato válido y Minecraft rechaza los que no existen.
+### Perfiles y acciones de jugador
 
-El helper lee los `.dat` NBT con un lector propio de sólo lectura (`panel/nbt.py`) con límites de tamaño, profundidad y elementos, y sin seguir enlaces en `data/`.
+Cada jugador tiene una ficha:
+- **Datos:** edición, estado, operador, whitelist, ban, UUID y XUID, primera y última conexión, tiempo jugado.
+- **Vitales:** vida, hambre, nivel.
+- **Ubicación:** posición actual, cama y última muerte, con enlace al mapa.
+- **Inventario:** armadura y cofre de ender, con los iconos reales.
+- **Estadísticas y logros.**
 
-**Móvil.** Auditado con emulación real de dispositivo (Chrome DevTools Protocol) en 320, 360, 390, 412 y 768 px:
+Con el jugador conectado, posición y vida se leen en vivo.
 
-- Sin desbordes horizontales ni elementos fuera de pantalla, sin textos de menos de 12 px y sin contenido tapado por la barra.
-- Zonas táctiles de 40 px o más en todo, salvo los huecos de la barra de objetos a 320 y 360 px (34 y 39 px). Cumplen el mínimo WCAG 2.2 AA de 24 px y conservan las 9 casillas del juego.
-- CSS y JS llevan la huella del contenido en la URL, así que un despliegue nunca deja al navegador con la versión anterior.
+![Acciones: dar objetos y kits](docs/images/profile-items.png)
 
-**Biblioteca de mundos** (World → World library), hasta 50 mundos y **uno activo**, siempre en los puertos de siempre: nadie cambia de dirección.
+La tarjeta **Actions** agrupa las acciones en pestañas al estilo del inventario creativo:
+
+| Pestaña | Acciones |
+| --- | --- |
+| Items | Buscar cualquier objeto por su nombre en inglés y darlo (1–64). Kits: Starter, Miner, Builder, Explorer, Farmer y Warrior. Niveles de experiencia y vaciar inventario |
+| Effects | 14 efectos (visión nocturna, velocidad, salto, invisibilidad…) de 1, 5 o 15 minutos y nivel I o II; curar, alimentar y quitar efectos |
+| Teleport | Al spawn, a su cama, a su última muerte (con 30 s de protección para recuperar sus cosas; nunca al vacío), a otro jugador, traerlo, o a coordenadas (Y vacía = superficie) |
+| Fun | Fuegos artificiales, trueno (sólo sonido y chispas), mascota ya domesticada (lobo, gato o loro) y encantar el objeto de la mano hasta su nivel máximo |
+| Message | Chat (`[Server]` en dorado), título grande o texto sobre la barra, hasta 100 caracteres |
+| Admin | Operador, whitelist, ban y unban, modo de juego y kick |
+
+Con el jugador desconectado sólo funciona Admin. Cada acción muestra un aviso sin mover la página y queda registrada en la Pi.
+
+![Acciones: teletransporte, vitales y ubicación](docs/images/profile-teleport.png)
+
+![Inventario y estadísticas](docs/images/profile-inventory.png)
+
+### Tareas largas y avisos
+
+Backups, arranques, cambios de mundo, importaciones y exportaciones corren en segundo plano: aparece un aviso «started» y puedes seguir navegando. La bandeja de la cabecera muestra la tarea en curso. Al terminar sale un aviso «done!» o «failed»; al pulsarlo se abre el resultado.
+
+![Resultado de una tarea en segundo plano](docs/images/job-result.png)
+
+### Consola y auditoría
+
+![Consola en vivo](docs/images/console.png)
+
+La consola ejecuta comandos de operador (give, tp, time…), igual que `manage.sh command`:
+- Una sola línea de hasta 256 caracteres.
+- `stop`, `restart` y `reload` están bloqueados; para eso están los botones, que comprueban el cierre limpio.
+- Cada comando queda en `logs/operations.log`.
+
+![Auditoría en Health](docs/images/health.png)
+
+### En el móvil
+
+<p>
+  <img src="docs/images/mobile-dashboard.png" alt="Dashboard en un móvil" width="300">
+  <img src="docs/images/mobile-actions.png" alt="Acciones de jugador en un móvil" width="300">
+</p>
+
+Probado con emulación real de dispositivo a 320, 360, 390, 412 y 768 px:
+- Sin desbordes horizontales.
+- Textos de 12 px o más.
+- Zonas táctiles de 40 px o más, salvo las casillas de la barra a 320 y 360 px (34 y 39 px). Siguen cumpliendo el mínimo de 24 px de WCAG 2.2.
+
+### API
+
+La interfaz usa una API JSON que también puedes llamar con tu sesión. Los POST exigen el token CSRF en `X-CSRF-Token` y el mismo `Origin`.
+
+| Ruta | Uso |
+| --- | --- |
+| `GET /api/pulse` | Estado en vivo (salud, jugadores, memoria, temperatura) |
+| `GET /api/console?lines=200` · `POST /api/console` | Logs y un comando (`{"command": "time set day"}`) |
+| `POST /api/players/<uuid>/action` | Acción de jugador: `{"do": "give", "item": "diamond_sword", "count": 1}`. Acciones y campos en `panel/catalog.py` (`FIELDS`) |
+| `GET /api/items` | Catálogo de objetos `[id, nombre, icono]` |
+| `GET /api/jobs` · `GET /api/job/<id>` | Tareas en segundo plano y su resultado |
+
+Responde `{"ok": true, "message": ..., "output": ...}` o `{"ok": false, "error": ...}`.
+
+### Seguridad del panel
+
+- **Proceso sin privilegios.** El servidor web corre como `mclan-panel` y no habla con Docker. Todo pasa por `panel/helper.py`, lo único que puede ejecutar con sudo, y que sólo acepta verbos fijos con valores validados por patrones y listas cerradas.
+- **Nada de texto libre a la consola**, con una excepción: el mensaje a un jugador. Es texto imprimible de hasta 100 caracteres, sin saltos de línea ni códigos de color, y viaja dentro de un componente de texto escapado con `json.dumps`, nunca como parte del comando. Autenticación, puertos y RCON no se pueden cambiar desde la web.
+- **Código de root.** `panel/install.sh` exige que el helper y todo el código que importa pertenezcan a root y no tengan escritura de grupo u otros.
+- **Contraseña y sesión:**
+  - contraseña con PBKDF2-SHA256 y bloqueo tras 5 fallos en 10 minutos;
+  - cookie `__Host-` con `Secure`, `HttpOnly` y `SameSite=Strict`;
+  - token CSRF y comprobación de `Origin` en cada POST.
+- **Protección de las peticiones:**
+  - CSP sin código ni estilos en línea;
+  - sólo se atiende su propio `Host`, contra el DNS rebinding;
+  - límites de conexiones (32 en total, 8 por IP) y de tamaño de petición.
+- **Acceso a `data/`.** El helper no sigue enlaces, lee archivos con tope de tamaño y escribe `server.properties` mediante descriptores de directorio. Las operaciones usan el mismo bloqueo que `manage.sh` y quedan en `logs/operations.log`.
+- **Reinicios seguros.** Reiniciar el panel no corta un backup o un reinicio en curso (`KillMode=process`).
+
+**Texturas.** `panel/install.sh` extrae dentro del contenedor, del cliente que descargó BlueMap, una lista cerrada de texturas y el catálogo de objetos (`items/` y `lang/en_us.json`). Lo hace con `panel/extract_assets.py`; después `panel/install_assets.py` lo valida en el host: nombres permitidos, firma PNG, tamaños y JSON. Se sirve sólo en la LAN. Las fuentes Pixelify Sans y VT323 son OFL y están en `panel/static/fonts/`.
+
+```bash
+sudo panel/install.sh                   # instalar o actualizar (repetir tras rebind o git pull)
+sudo panel/install.sh --reset-password  # nueva contraseña desde la terminal
+sudo panel/install.sh --uninstall       # retira servicio y regla sudo; conserva /etc/mclan-panel
+```
+
+## 6. Mapa BlueMap
+
+Mapa 3D con los jugadores en vivo en `http://IP_DE_LA_PI:8100/`, sólo en la LAN. [BlueMap](https://bluemap.bluecolored.de/) es un plugin de Paper dentro del mismo proceso, resuelto en Hangar y fijado por SHA-256 como el resto.
+
+- **Configuración inicial:** `plugins/BlueMap/core.conf` se crea una vez con `accept-download: true`, que acepta la EULA ya aceptada en `eula.txt` para descargar las texturas de Mojang. Lleva además dos hilos de render y métricas desactivadas. Tus cambios posteriores se respetan.
+- **Ajuste de la web (`craft-pi: tuning-1`):** 250 bloques de detalle cercano y 4000 de vista lejana. Si el navegador conserva los valores anteriores, usa *Settings → Reset* en BlueMap.
+- **Paper 26.x y la luz:** Moonrise no deja la luz como la espera BlueMap, y sin ajuste el mapa se ve negro de cerca. `docker/bluemap-setup.sh` activa `ignore-missing-light-data` una vez por mapa (`craft-pi: light-fix`).
+- **Backups:** no incluyen las teselas (`data/bluemap/web/maps`); se regeneran.
+- **Mapa negro al abrirlo:** el navegador puede haber guardado una posición sin terreno. Usa **Live map** en el panel, que centra en el spawn.
+
+Para ahorrar recursos, desde **World** en el panel o desde la terminal:
+
+```bash
+sudo ./manage.sh command "bluemap stop"   # pausa el render; la web sigue
+sudo ./manage.sh command "bluemap start"
+sudo ./manage.sh plugin bluemap off       # retira el plugin y su memoria (reinicia)
+sudo ./manage.sh plugin bluemap on
+```
+
+## 7. Biblioteca de mundos
+
+Hasta **50 mundos** guardados y **uno activo**, siempre en los puertos de siempre: nadie cambia de dirección. Desde **World → World library** o la terminal:
+
+![Biblioteca de mundos](docs/images/world-library.png)
 
 ```bash
 sudo ./manage.sh world list
@@ -541,49 +374,248 @@ sudo ./manage.sh world import imports/mundo.mcworld "Mi mundo Bedrock"
 sudo ./manage.sh world activate creative-build     # pide CAMBIAR
 sudo ./manage.sh world export main --format java   # o --format bedrock → exports/
 sudo ./manage.sh world rename skyblock "Skyblock 2"
-sudo ./manage.sh world delete skyblock             # archiva en backups/worlds y borra
+sudo ./manage.sh world delete skyblock             # lo archiva en backups/worlds y lo borra
 ```
 
-- **Dónde está cada cosa:** el mundo activo está en `data/world`. Los demás, en `worlds/<id>/world`, con su mapa de BlueMap en `worlds/<id>/bluemap-maps`. Los backups normales sólo incluyen el mundo activo.
-- **Qué guarda cada mundo:** sus inventarios y datos de jugador (Minecraft 26.x los guarda dentro del mundo), su borde, su spawn y sus ajustes (dificultad, modo, PvP, vuelo, protección del spawn, semilla). Whitelist, operadores y bans son del servidor.
-- **Activar** para limpio el servidor, hace un backup verificado `pre-switch-<id>`, intercambia mundo, mapa y ajustes, y verifica. Si el mundo nuevo no arranca, deshace el intercambio y vuelve a arrancar el anterior. Un mundo nuevo se genera con su semilla en el primer arranque. Un mundo Bedrock importado recalcula su luz automáticamente la primera vez.
-- **Importar:** sube el `.zip` o `.mcworld` desde World → World library (hasta 2 GiB, con barra de progreso; se escribe en `imports/` en bloques de 1 MiB y exige 4 GiB libres) o cópialo a `imports/`, por ejemplo arrastrándolo en VS Code (la carpeta es del administrador y del grupo `mclan-panel`). La extracción es segura (sin rutas, enlaces ni tamaños anómalos) y rechaza mundos de una versión más nueva que la del servidor. Bedrock se convierte con Chunker 1.21.0, fijado por SHA-256, en un contenedor sin red. Pierde animales, monstruos, objetos en el suelo, barcas y vagonetas con cofre.
-- **Exportar:** genera un zip Java o un `.mcworld` en `exports/` con su `.sha256`, descargable desde el panel en streaming.
-- **Restore** sabe a qué mundo pertenece cada backup (`data/.mclan-world`). Si es de otro mundo, guarda el activo en la biblioteca y aparta en `state/pre-restore-world-*` la copia anterior del mundo entrante: no se pierde nada.
+- **Dónde está cada cosa:** el mundo activo vive en `data/world`. Los demás, en `worlds/<id>/world`, con su mapa en `worlds/<id>/bluemap-maps`.
+- **Qué guarda cada mundo:** inventarios y datos de jugador, borde, spawn y ajustes (dificultad, modo, PvP, vuelo, protección del spawn, semilla). Whitelist, operadores y bans son comunes a todos.
+- **Activar** sigue estos pasos:
+  1. Para el servidor y hace un backup verificado `pre-switch-<id>`.
+  2. Intercambia mundo, mapa y ajustes, y verifica.
+  3. Si el mundo nuevo no arranca, deshace el cambio y arranca el anterior.
 
-**La consola ejecuta comandos de operador** (give, tp, op…), igual que `manage.sh command`. Las reglas:
+  Un mundo nuevo se genera con su semilla. Uno Bedrock importado recalcula su luz la primera vez.
+- **Importar:** sube el `.zip` (Java) o `.mcworld` (Bedrock) desde el panel, hasta 2 GiB con barra de progreso, o cópialo a `imports/`.
+  - La extracción rechaza rutas, enlaces y tamaños anómalos, y también mundos más nuevos que el servidor.
+  - Bedrock se convierte con [Chunker](https://github.com/HiveGamesOSS/Chunker) 1.21.0, fijado por SHA-256, en un contenedor sin red. Se pierden animales, monstruos, objetos en el suelo, barcas y vagonetas con cofre.
+- **Exportar:** genera un zip Java o un `.mcworld` en `exports/` con su `.sha256`, descargable desde el panel.
+- **Backups y restore:** los backups normales sólo incluyen el mundo activo. `restore` sabe de qué mundo es cada backup. Si es de otro, guarda el activo en la biblioteca y aparta la copia anterior del mundo entrante en `state/pre-restore-world-*`: no se pierde nada.
 
-- Sólo una línea imprimible de hasta 256 caracteres.
-- `stop`, `restart` y `reload` están bloqueados, también con espacio de nombres (`minecraft:stop`). Para eso están los botones, que comprueban el cierre limpio.
-- Cada comando queda en `logs/operations.log`.
-- Desde JavaScript usa `POST /api/console` con el token CSRF en la cabecera `X-CSRF-Token` y el mismo `Origin`.
+La migración manual de un mundo Bedrock, tal como se ensayó antes de existir la biblioteca, sigue documentada en [ESTADO.md](docs/ESTADO.md). `tools/relight.py` recalcula la luz de un mundo convertido.
 
-**Diseño y seguridad:**
+## 8. Skins de Bedrock (MclanSkins)
 
-- El servidor web corre como el usuario de sistema `mclan-panel`, sin privilegios, y no habla con Docker. Toda operación pasa por `panel/helper.py`, que es lo único que `mclan-panel` puede ejecutar con sudo (`/etc/sudoers.d/mclan-panel`).
-- El helper sólo acepta verbos fijos y nombres que cumplen patrones cerrados; **nunca** envía texto libre a la consola. La única excepción son los mensajes a un jugador: texto imprimible de hasta 100 caracteres, sin saltos de línea ni códigos de color, que viaja dentro de un componente de texto escapado con `json.dumps` (`tellraw`/`title`), nunca como parte del comando. Los ajustes editables son una lista cerrada: autenticación, puertos y RCON no se tocan desde la web.
-- Las operaciones usan `manage.sh` o su mismo bloqueo, y quedan en `logs/operations.log` como `Operación: panel …`. Sigue habiendo un único responsable del proceso de Paper.
-- `install.sh` comprueba que el helper y todo el código que importa pertenecen a root y no admiten escritura de grupo u otros. Si alguien cambia esos permisos, la regla sudo deja de ser segura.
-- CSP sin código ni estilos en línea: `script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'`. Los anchos de las barras van por clases, no con `style=`.
-- Contraseña con PBKDF2-SHA256 (dos cálculos simultáneos como máximo). Cookie `__Host-` con `Secure`, `HttpOnly` y `SameSite=Strict`, token CSRF y comprobación de `Origin` en cada POST (también en el login), bloqueo tras 5 fallos en 10 minutos, CSP sin scripts y sin incrustación en otras páginas.
-- Sólo atiende el `Host` con el que se publica (contra DNS rebinding). TLS por conexión en su propio hilo, `Content-Length` estricto y límite de 32 conexiones en total y 8 por IP.
-- `data/` pertenece al usuario del contenedor: el helper no sigue enlaces en ningún componente de la ruta, sólo lee archivos regulares y con tope, y escribe `server.properties` mediante descriptores de directorio. El diagnóstico de Geyser se lee dentro del contenedor.
-- Reiniciar el servicio del panel no interrumpe un backup o reinicio ya lanzado (`KillMode=process`).
+Sin ayuda, las skins Bedrock salen mal:
+- Floodgate da a cada jugador Bedrock la conversión Java de su skin (64×64, cuerpo estándar), y Geyser manda esa misma conversión a los clientes Bedrock.
+- Las skins con forma propia salen aplanadas.
+- Las del creador de personajes (persona: piezas, tintes y cara animada) las rechaza el cliente y muestra una skin por defecto.
 
-**Jugadores Bedrock y XUID.** `fwhitelist add GAMERTAG` sólo funciona si la caché global de GeyserMC conoce al jugador. Si no, hay dos salidas:
+El addon propio **MclanSkins** (`addons/mclan-skins`) lo corrige:
 
-- Indicar su XUID: el panel lo convierte al UUID de Floodgate.
-- Usar la **apertura temporal**: la whitelist se desactiva hasta que entra ese jugador (máximo 15 minutos), se le añade y se reactiva siempre, también si falla algo. Mientras está abierta puede entrar cualquier cuenta válida de la LAN.
+- **Jugadores Bedrock:** ven las skins Bedrock **completas**, también la propia. Al iniciar sesión, el addon guarda la skin que firmó el cliente y la pone en cada entrada de la lista de jugadores que Geyser envía a Bedrock, como hace el servidor oficial de Bedrock.
+- **Jugadores Java:** ven la skin por defecto (Steve/Alex). Con `java-skin: converted` en `data/plugins/MclanSkins/config.yml` (y reinicio) ven la conversión de GeyserMC.
+- **Cambiar de skin:** se aplica al volver a conectar. Geyser no traslada el cambio en mitad de la partida.
+- **Compilación:** se compila en la Pi durante la instalación y cada `update`.
+  - Lo hace en un contenedor JDK fijado por digest, sin red, contra los JAR exactos de la release.
+  - Si Geyser cambia algo incompatible, `update` falla **antes** de parar el servidor y dice cómo seguir.
+- **Desactivarlo:** `sudo ./manage.sh plugin mclan_skins off`. Desactivado, una compilación fallida ya no bloquea las actualizaciones. `tools/audit.sh` avisa si el addon no puede engancharse a la build de Geyser.
 
-### Importar un mundo Bedrock (.mcworld)
+## 9. Administración desde la terminal
 
-No hay un comando automático: es una migración que conviene revisar cada vez. El procedimiento ensayado (detalle en [ESTADO.md](docs/ESTADO.md)) es:
+Desde `/opt/minecraft-lan-installer`. `sudo` es intencionado: pertenecer al grupo docker equivale a ser root.
 
-1. Extraer el `.mcworld` (un zip) en una carpeta nueva y revisar que no traiga behavior ni resource packs.
-2. Convertir con el CLI de [Chunker](https://github.com/HiveGamesOSS/Chunker), comprobando su SHA-256, a `JAVA_<versión del servidor>`. Hazlo en un contenedor sin red con la imagen Java de la release: `docker run --rm --network none --user 1000:1000 -v …:/in -v …:/out <java_base> java -jar chunker-cli.jar -i /in -o /out/mundo -f JAVA_26_3`. LevelDB necesita escribir en la carpeta de entrada: usa una copia.
-3. Revisar los avisos `Missing entity mapping`: esas entidades se pierden.
-4. Probar el mundo en un Paper aislado (sin red ni puertos) antes de tocar producción.
-5. `stop`, `backup`, apartar `data/world`, copiar el mundo convertido con propietario `10000:10000` y `start`.
-6. Fijar el spawn si Bedrock usaba «buscar superficie» (`setworldspawn X Y Z`).
-7. **Recalcular la luz.** Chunker deja la luz de cielo a cero, y sin este paso el mundo se ve oscuro en el mapa y en el juego. Haz `backup` y, con el servidor en marcha y sin jugadores, ejecuta `sudo docker compose --project-name minecraft-lan --project-directory . --env-file .env -f compose.yaml exec -T minecraft python3 - < tools/relight.py`. Genera un anillo de chunks en el borde explorado (ver el propio script).
-8. Regenerar el mapa: `bluemap purge MAPA` en cada mapa.
+| Comando | Resultado |
+| --- | --- |
+| `sudo ./manage.sh start` · `stop` · `restart` | Arranca y verifica, o para con hasta 180 s para un cierre limpio |
+| `sudo ./manage.sh status` | Estado del contenedor y de la release activa |
+| `sudo ./manage.sh logs --tail 150` · `--follow` | Logs del servidor (Ctrl+C no para el servidor) |
+| `sudo ./manage.sh verify` | Verificación completa de servicios y protocolos |
+| `sudo ./manage.sh backup` · `restore ARCHIVO` | Backup verificado y restauración ([§10](#10-backups-y-restauración)) |
+| `sudo ./manage.sh update --plan` · `update` | Ver y aplicar versiones nuevas ([§11](#11-actualizar)) |
+| `sudo ./manage.sh rebind 192.168.1.60` | Cambiar la IP publicada si cambia el DHCP; después `sudo panel/install.sh` |
+| `sudo ./manage.sh plugin bluemap\|mclan_skins on\|off` | Activar o desactivar un plugin opcional (reinicia si estaba en marcha) |
+| `sudo ./manage.sh world …` | Biblioteca de mundos ([§7](#7-biblioteca-de-mundos)) |
+| `sudo ./manage.sh command "list"` | Comando de consola tras confirmar `EJECUTAR` |
+| `sudo tools/audit.sh [--verify]` | Auditoría de sólo lectura |
+
+Sólo una operación que cambie el estado puede correr a la vez; `status` y `logs` siguen disponibles. Los comandos de consola tienen permisos de operador: no pongas contraseñas en ellos.
+
+## 10. Backups y restauración
+
+```bash
+sudo ./manage.sh backup
+sudo ./manage.sh restore backups/minecraft-FECHA-manual.tar.gz   # pide RESTAURAR
+```
+
+**Qué hace `backup`.** Para el servidor si estaba en marcha, espera un cierre limpio, crea el archivo y lo vuelve a leer comprobando **todos los hashes**. Después arranca sólo si estaba funcionando.
+
+La copia sólo se da por consistente si los logs prueban que el mundo se guardó. Vale el mensaje vanilla `All dimensions are saved` o, en Paper 26.x, la secuencia `Saving worlds` → `Halted I/O scheduler for world` → `All RegionFile I/O tasks to complete`. Un OOM, un SIGKILL o la falta de esa prueba impiden darla por buena.
+
+**Qué contiene.** El mundo activo, los jugadores, la configuración, la EULA, los datos y claves de plugins, los metadatos, `compose.yaml`, `.env` y los JARs de la release activa. Lleva un `.sha256` y un manifiesto interno.
+
+**Las copias contienen la clave de Floodgate y la contraseña de RCON**: no las subas a ningún repositorio.
+
+**Qué hace `restore`.**
+- Valida en una carpeta temporal y rechaza rutas absolutas, `..`, enlaces, dispositivos, duplicados y archivos que no estén en el manifiesto.
+- Comprueba los JARs antes de tocar el mundo.
+- Guarda una copia `pre-restore` o, si el estado actual no es consistente, aparta íntegro el directorio en `state/pre-restore-…`.
+- Una operación interrumpida deja `state/operation.json` y bloquea los arranques hasta resolverla.
+- Si una actualización ya abrió el mundo, se restaura **el snapshot completo**: no existe un downgrade seguro de mundos.
+- En otro equipo: `restore ARCHIVO --lan-ip NUEVA_IP`.
+
+Guarda de vez en cuando una copia **fuera de la microSD**: si la tarjeta falla, se pierden también los backups que haya en ella. No hay backups programados ni purga automática: los `pre-switch` y `pre-update` se acumulan y conviene borrar los antiguos a mano. Más detalle en [RECUPERACION.md](docs/RECUPERACION.md).
+
+## 11. Actualizar
+
+### Versiones de Minecraft y plugins
+
+```bash
+sudo ./manage.sh update --plan    # muestra las builds propuestas y los cambios del proyecto
+sudo ./manage.sh update           # pide ACTUALIZAR
+```
+
+- **Qué propone:** builds compatibles con la misma versión de Minecraft del mundo. Si Geyser ya exige otra versión de Java, `update` se detiene; para subir de versión de Minecraft, hazlo de forma explícita con `--minecraft-version auto`.
+- **Antes de parar el servidor:** descarga, construye y compila todo.
+- **Después:** crea el snapshot `pre-update`, activa la release nueva y verifica.
+- **Si la verificación falla:** detiene la release nueva, conserva la marca de operación y te indica el snapshot que debes restaurar.
+- **Plugins desactivados:** siguen desactivados después de actualizar.
+
+### Código de este proyecto
+
+`manage.sh update` no descarga cambios del repositorio; eso se hace con Git:
+
+```bash
+cd /opt/minecraft-lan-installer
+sudo ./manage.sh backup
+sudo git pull --ff-only
+sudo ./manage.sh update --plan    # avisa si hay código Docker, Compose o addons nuevos
+sudo ./manage.sh update           # reconstruye, hace snapshot, aplica y verifica
+sudo panel/install.sh             # aplica el código nuevo del panel y renueva texturas y catálogo
+sudo tools/audit.sh
+```
+
+Tras un `git pull` con código Docker o Compose nuevo, `start` y `restart` se niegan a arrancar hasta ejecutar `update`; `status`, `logs` y `stop` siguen disponibles.
+
+`compose.yaml` sólo se sustituye si es idéntico a una plantilla publicada (`PREVIOUS_TEMPLATES` en `scripts/mclan/runtime.py`). Si lo editaste a mano, `update` se detiene sin tocarlo.
+
+`manage.sh` no actualiza Raspberry Pi OS ni Docker Engine.
+
+## 12. Configuración y memoria
+
+| Parámetro | Inicial | Motivo |
+| --- | --- | --- |
+| JVM `-Xms` / `-Xmx` | 512 MiB / 2048 MiB | Deja sitio a la memoria nativa, Geyser y el sistema |
+| Límite del contenedor | 3 GiB, sin swap extra | **Sólo con el cgroup de memoria activo** ([§3.1](#31-ajustes-recomendados-del-sistema)) |
+| View / simulation distance | 6 / 4 chunks | Punto de partida moderado para la Pi |
+| Max players | 6 | Límite inicial, no una garantía de rendimiento |
+
+Es una configuración de partida conservadora, no un benchmark: prueba con 2–4 jugadores y vigila CPU, temperatura y memoria (Dashboard o Health).
+
+Dificultad, MOTD, distancias, PvP y otros ajustes se cambian en **World → Server settings** (guardar reinicia). A mano: `stop`, edita `data/server.properties` y `start`. Conserva estos valores, que el validador exige:
+- `online-mode=true`;
+- `enforce-secure-profile=false` (permite el juego cruzado sin pedir a Bedrock un perfil firmado de Java; no desactiva la autenticación);
+- `enable-status=true`;
+- RCON interno y los puertos previstos.
+
+**Si activaste el cgroup de memoria después de instalar**, recrea el contenedor una vez: el que ya existía conserva `Memory=0` aunque reinicies. Los datos no se tocan:
+
+```bash
+sudo ./manage.sh stop
+sudo docker compose --project-name minecraft-lan rm -f minecraft
+sudo ./manage.sh start
+```
+
+**Plugins gestionados.** En cada arranque, el entrypoint sincroniza desde la release fijada `Geyser-Spigot.jar`, `floodgate-spigot.jar`, `BlueMap.jar`, `Chunky.jar`, `ViaVersion.jar`, `ViaBackwards.jar` y `MclanSkins.jar`. No pongas otras copias de esos plugins con otro nombre en `data/plugins/`.
+
+**Archivos gestionados.** `compose.yaml` es copia de `docker/compose.template.yaml` y el validador rechaza divergencias. `.env` se genera a partir del estado: para cambiar la IP usa `rebind`.
+
+## 13. Red y arranque automático
+
+- **Puertos:** se publican sólo en la IPv4 LAN elegida: TCP 25565 (Java), UDP 19132 y TCP 19132 (Bedrock y signaling NetherNet), UDP 19133 (WebRTC) y TCP 8100 (mapa). El panel escucha en TCP 8443 de esa misma IP.
+- **RCON:** 25575 no se publica nunca fuera del contenedor.
+- **Router y firewall:** no se toca el router (ni port forwarding ni UPnP) ni las reglas del firewall del host. Docker sí gestiona sus propias reglas para publicar puertos, y eso puede interactuar con UFW o firewalld. Publicar en una IP local no es una ACL: equipos de otras subredes que ya lleguen a esa IP podrían acceder.
+- **Si cambia la IP por DHCP:** `sudo ./manage.sh rebind NUEVA_IP` y después `sudo panel/install.sh`, que renueva el certificado.
+- **Al arrancar la Pi:** Docker y el panel arrancan con systemd, y el contenedor usa `restart: unless-stopped`. Una parada manual se respeta incluso tras reiniciar; vuelve con `manage.sh start`.
+
+## 14. Diagnóstico
+
+| Síntoma | Qué hacer |
+| --- | --- |
+| `You are not whitelisted` | Añádelo en Players, o usa **Open 5 min and wait** en su intento rechazado (Bedrock) |
+| Floodgate «does not know» un gamertag | Usa su XUID o la apertura temporal ([§3.5](#35-primer-acceso-whitelist-y-operador)) |
+| Java entra y Bedrock no | Versión Bedrock dentro del rango de Geyser, UDP 19132 y 19133, aislamiento de la Wi-Fi y que el cliente permita añadir servidores |
+| Java de otra versión sale en rojo | Demasiado antigua para ViaBackwards (anterior a la 1.10) |
+| Skin Bedrock por defecto o aplanada | `tools/audit.sh`: MclanSkins debe estar habilitado y enganchado. Reconecta tras cambiar de skin |
+| Panel sin iconos ni buscador de objetos | Repite `sudo panel/install.sh` con el servidor en marcha y BlueMap activo |
+| El panel no carga | `sudo systemctl status mclan-panel` y `sudo journalctl -u mclan-panel -n 50`; usa `https://` y el puerto 8443 |
+| `update` falla al compilar MclanSkins | La build nueva de Geyser cambió algo interno. `sudo ./manage.sh plugin mclan_skins off` y repite `update` |
+| `start` pide ejecutar `update` | Hiciste `git pull` con código Docker o Compose nuevo ([§11](#11-actualizar)) |
+| Mapa negro | Usa Live map desde el panel; tras importar un Bedrock, `bluemap purge MAPA` |
+| Límite de memoria no efectivo | Activa el cgroup ([§3.1](#31-ajustes-recomendados-del-sistema)) y recrea el contenedor ([§12](#12-configuración-y-memoria)) |
+| Varias IP candidatas al instalar | `ip -4 addr` y `--lan-ip` |
+| Puerto ocupado | `sudo ss -ltnup`: algo usa 25565, 19132, 19133, 8100 u 8443 |
+| ARM64 rechazado | `uname -m` y `dpkg --print-architecture`: hace falta el sistema de 64 bits |
+| Fallo HTTP, DNS o TLS | Fecha y hora (`timedatectl`), DNS y proxy; no desactives TLS |
+| Falta un build estable compatible | Espera a que Paper o Geyser lo publiquen; el proyecto no fuerza versiones |
+| OOM o reinicios | `sudo docker stats --no-stream`; baja distancias o pausa BlueMap |
+| Backup sin confirmar el guardado | Revisa el log del cierre; no fuerces la copia como consistente |
+| Operación interrumpida | Sigue [RECUPERACION.md](docs/RECUPERACION.md) con el snapshot de `state/operation.json` |
+
+```bash
+sudo ./manage.sh status
+sudo ./manage.sh logs --tail 200
+sudo tools/audit.sh
+sudo docker stats --no-stream
+free -m; df -h; vcgencmd measure_temp; vcgencmd get_throttled
+```
+
+Los logs de operaciones rotan en `logs/`. Docker guarda tres archivos de unos 10 MB, y Paper escribe además en `data/logs/`, que no se purga.
+
+## 15. Arquitectura, archivos y desarrollo
+
+Un único contenedor ejecuta **Paper** con todos los plugins en la misma JVM. El panel es un servicio aparte del host.
+
+| Tráfico o dato | Recorrido |
+| --- | --- |
+| Java | IP LAN, TCP 25565 → Paper |
+| Bedrock hasta 26.5x (RakNet) | IP LAN, UDP 19132 → Geyser → Paper, autenticado por Floodgate |
+| Bedrock 26.60+ (NetherNet) | Signaling TCP 19132 y WebRTC UDP 19133 → Geyser → Paper |
+| Panel web | Navegador → `mclan-panel` (TCP 8443) → sudo → `panel/helper.py` → `manage.sh` / RCON interno |
+| Mundos | `data/` del host → `/data` del contenedor; mundos guardados en `worlds/` |
+| Binarios fijados | `releases/<id>/` → `/opt/release` en sólo lectura |
+
+```text
+minecraft-lan-installer/
+  install.sh, manage.sh          Entradas Bash pequeñas; la lógica es Python de biblioteca estándar
+  scripts/mclan/                 Host, versiones, runtime, backups, mundos, addons, CLI
+  docker/                        Dockerfile (Temurin JRE ARM64), plantilla Compose, entrypoint, sondas, BlueMap
+  addons/mclan-skins/            Plugin propio de skins (se compila en la Pi)
+  panel/                         Servidor web, vistas, helper privilegiado, catálogo de acciones, instalador
+  tools/                         audit.sh (auditoría) y relight.py (luz de mundos convertidos)
+  docs/                          Estado, guía desde cero, recuperación, validación e imágenes
+  tests/                         Pruebas unittest y fixtures de las APIs
+  MANIFEST.sha256                SHA-256 de cada archivo del repositorio
+```
+
+Al instalar se crean `compose.yaml`, `.env`, `config/settings.json`, `state/`, `releases/`, `data/`, `backups/`, `logs/`, `worlds/`, `imports/` y `exports/`. Ninguno va a Git. No muevas la carpeta con el servidor en marcha.
+
+**Selección de versiones:**
+1. La versión de Java la marca la [página oficial de compatibilidad de Geyser](https://geysermc.org/wiki/geyser/supported-versions/).
+2. Paper se toma de su build `STABLE` para esa versión.
+3. BlueMap, Chunky, ViaVersion y ViaBackwards, de la última *Release* de Hangar que declara esa versión exacta.
+4. Todo se fija con el SHA-256 publicado.
+5. La imagen usa Temurin con el digest fijado.
+6. El esquema de configuración de Geyser se lee del JAR sin ejecutarlo.
+
+Todo queda en `state/active.json` y `releases/<id>/versions.lock.json`. Repetir `install.sh` sobre una instalación activa no cambia versiones ni configuración: sólo comprueba y arranca.
+
+**Pruebas:**
+
+```bash
+./tests/run.sh            # sintaxis Bash, compilación Python y unittest
+./tests/run.sh --strict   # además ShellCheck (sudo apt-get install shellcheck)
+```
+
+No instalan Docker ni APT. Usan temporales, fixtures y dobles de Docker; las sondas se prueban contra sockets reales locales.
+
+Si cambias un archivo, regenera el manifiesto con `git ls-files | grep -v '^MANIFEST.sha256$' | xargs sha256sum > MANIFEST.sha256`.
+
+## 16. Fuentes y licencias
+
+- [Docker en Debian](https://docs.docker.com/engine/install/debian/), [Compose](https://docs.docker.com/compose/install/linux/) y [Docker y firewalls](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
+- [API de descargas de Paper](https://docs.papermc.io/misc/downloads-service/) y [requisitos de Java](https://docs.papermc.io/misc/java-install/).
+- [Geyser](https://geysermc.org/wiki/geyser/setup/), [compatibilidad](https://geysermc.org/wiki/geyser/supported-versions/), [NetherNet](https://geysermc.org/blog/preparing-for-nethernet), [Floodgate](https://geysermc.org/wiki/floodgate/) y [código fuente](https://github.com/GeyserMC/Geyser).
+- [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion), [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards), [BlueMap](https://bluemap.bluecolored.de/), [Chunky](https://hangar.papermc.io/pop4959/Chunky) y [Chunker](https://github.com/HiveGamesOSS/Chunker).
+- [Raspberry Pi Imager](https://www.raspberrypi.com/software/) y [EULA de Minecraft](https://www.minecraft.net/eula).
+
+Este repositorio no redistribuye JARs, texturas, mundos, claves ni imágenes Docker: todo se descarga de sus proveedores en tu Pi, y cada componente conserva su licencia. Minecraft es una marca de Mojang/Microsoft; este proyecto no está afiliado a ellas.

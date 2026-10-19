@@ -359,3 +359,25 @@ Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa
     - lobo domesticado, con `Owner` = UUID del jugador como int-array.
   - **Rechazados por el helper:** `diamond;op` y Silk Touch III.
 - **Pendiente:** que el operador pruebe las pestañas desde su navegador.
+
+## 0.8.1: auditoría de la instalación (19-10-2026)
+
+Antes de publicar los cambios se auditó si una instalación nueva reproduce todo lo hecho a mano durante el proyecto.
+
+- **Comprobado:**
+  - Un clon limpio pasa las pruebas y el MANIFEST.
+  - `/opt` no tiene cambios ni archivos fuera de Git.
+  - `install.sh --check` desde el clon limpio propone la misma release activa (`9aa39d2938ccf8308e8c`, con ViaVersion, ViaBackwards y MclanSkins).
+  - La configuración inicial coincide con la actual.
+- **Corregido:**
+  - `panel/install.sh` espera a que BlueMap descargue el cliente (texturas y catálogo; `MCLAN_ASSETS_WAIT`, 600 s) y explica cómo repetir.
+  - **Bug:** `manage.sh update` perdía `disabled_plugins`, y un BlueMap desactivado volvía tras actualizar.
+  - MclanSkins se puede desactivar (`manage.sh plugin mclan_skins off`). Desactivado, si no compila no bloquea `update`; activo, `update` falla antes de parar el servidor y dice cómo seguir.
+  - La verificación de instalación y actualización exige cada plugin de la release habilitado en Paper.
+  - `tools/audit.sh` comprueba cada plugin, el enganche de MclanSkins, Geyser sin depuración y las texturas y el catálogo del panel.
+- **Documentación:**
+  - README reorganizado con un camino de instalación completo (ajustes de memoria antes de instalar, servidor, panel, primer jugador, pregeneración opcional y auditoría), capturas con datos de demostración y referencias corregidas.
+  - La guía desde cero añade memoria, panel y primeros jugadores.
+  - El MANIFEST queda documentado para descargas ZIP.
+- **Verificado en hardware:** `update` con la verificación nueva («Verificación local correcta»), `panel/install.sh` y `tools/audit.sh` sin fallos.
+- **Pendiente de hardware:** la espera de texturas sólo se ensayará en una instalación nueva, porque aquí el cliente ya estaba descargado.
