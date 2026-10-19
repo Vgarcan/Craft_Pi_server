@@ -61,11 +61,13 @@ DATA_DIR="$CONFIG_DIR/data"
 mkdir -p "$DATA_DIR"
 chown -h "$USER_NAME:$USER_NAME" "$DATA_DIR"
 chmod 0700 "$DATA_DIR"
-# Organización anterior (hasta la 0.8.1): todo era del usuario del panel. Lo que no sea un archivo
-# regular de root se descarta; certificado y texturas se regeneran más abajo.
+# Organización anterior (hasta la 0.8.1): todo era del usuario del panel. Certificado y clave se
+# conservan si son archivos regulares (el panel ya podía leer la clave: regenerarlos no añade nada y
+# obligaría a aceptar otra huella); un enlace u otra cosa se descarta y se regenera. Las texturas se
+# vuelven a extraer como root.
 for leftover in tls.crt tls.key; do
     path="$CONFIG_DIR/$leftover"
-    if [[ -L $path || ( -e $path && ( ! -f $path || $(stat -c %u "$path") != 0 ) ) ]]; then rm -f "$path"; fi
+    if [[ -L $path || ( -e $path && ! -f $path ) ]]; then rm -f "$path"; fi
 done
 if [[ -L $CONFIG_DIR/assets || ( -e $CONFIG_DIR/assets && $(stat -c %u "$CONFIG_DIR/assets") != 0 ) ]]; then
     rm -rf --one-file-system "${CONFIG_DIR:?}/assets"
