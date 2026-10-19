@@ -707,24 +707,25 @@ class Panel:
         raise ValueError(f'unknown action {action}')
 
     def slot_commands(self, action, name, params):
-        """Editor de casillas: /item modify con modificadores en JSON escapado, /item replace."""
+        """Editor de casillas: /item modify con modificadores en JSON escapado, /item replace.
+        En 26.x el tipo de modificador va en «type» (antes «function»)."""
         slot = params[0]
         def modify(modifier):
             return [('item', 'modify', 'entity', name, slot, json.dumps(modifier, ensure_ascii=False))]
         if action == 'slot-enchant':
-            return modify({'function': 'minecraft:set_enchantments', 'add': False,
+            return modify({'type': 'minecraft:set_enchantments', 'add': False,
                            'enchantments': {f'minecraft:{params[1]}': int(params[2])}})
         if action == 'slot-unenchant':
-            return modify({'function': 'minecraft:set_components',
+            return modify({'type': 'minecraft:set_components',
                            'components': {'!minecraft:enchantments': {}, '!minecraft:stored_enchantments': {}}})
         if action == 'slot-repair':
-            return modify({'function': 'minecraft:set_damage', 'damage': 1.0})
+            return modify({'type': 'minecraft:set_damage', 'damage': 1.0})
         if action == 'slot-unbreakable':
-            return modify({'function': 'minecraft:set_components', 'components': {'minecraft:unbreakable': {}}})
+            return modify({'type': 'minecraft:set_components', 'components': {'minecraft:unbreakable': {}}})
         if action == 'slot-rename':
-            return modify({'function': 'minecraft:set_name', 'target': 'custom_name', 'name': {'text': params[1]}})
+            return modify({'type': 'minecraft:set_name', 'target': 'custom_name', 'name': {'text': params[1]}})
         if action == 'slot-count':
-            return modify({'function': 'minecraft:set_count', 'count': int(params[1])})
+            return modify({'type': 'minecraft:set_count', 'count': int(params[1])})
         if action == 'slot-clear':
             return [('item', 'replace', 'entity', name, slot, 'with', 'minecraft:air')]
         if action == 'slot-set':
@@ -762,7 +763,7 @@ class Panel:
         replies = [self.rcon(*words) for words in commands]
         # Minecraft responde con un error legible (objeto incompatible, jugador no encontrado…).
         failed = [r for r in replies if re.search(r'^(No |Unknown |Incorrect |Expected |Can\'t |Could not |'
-                                                 r'Invalid |Nothing changed|.* cannot support)', r)]
+                                                 r'Invalid |Failed to |Nothing changed|.* cannot support)', r)]
         return {'ok': not failed, 'output': ' '.join(failed or replies)[:600]}
 
     def status(self):

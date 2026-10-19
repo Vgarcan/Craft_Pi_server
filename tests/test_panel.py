@@ -320,7 +320,7 @@ class HelperValidationTests(unittest.TestCase):
         self.assertEqual(words[:5], ('item', 'modify', 'entity', 'Steve', 'hotbar.0'))
         self.assertEqual(json.loads(words[5])['enchantments'], {'minecraft:sharpness': 255})
         self.assertEqual(json.loads(run('slot-rename', 'hotbar.1', 'Bob "the" \\ blade')[0][5])['name']['text'], 'Bob "the" \\ blade')
-        self.assertEqual(json.loads(run('slot-repair', 'hotbar.1')[0][5]), {'function': 'minecraft:set_damage', 'damage': 1.0})
+        self.assertEqual(json.loads(run('slot-repair', 'hotbar.1')[0][5]), {'type': 'minecraft:set_damage', 'damage': 1.0})
         self.assertEqual(run('slot-clear', 'armor.head')[0], ('item', 'replace', 'entity', 'Steve', 'armor.head', 'with', 'minecraft:air'))
         self.assertEqual(run('slot-set', 'hotbar.3', 'bow', '1')[0][-2:], ('minecraft:bow', '1'))
         self.assertEqual(run('effect-remove', 'speed')[0], ('effect', 'clear', 'Steve', 'minecraft:speed'))
