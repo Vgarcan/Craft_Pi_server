@@ -22,7 +22,7 @@ for jar in Geyser-Spigot.jar floodgate-spigot.jar BlueMap.jar Chunky.jar ViaVers
         echo 'No se admiten enlaces en las rutas de los plugins gestionados.' >&2
         exit 1
     fi
-    if [ "$jar" = BlueMap.jar ] && disabled bluemap; then
+    if { [ "$jar" = BlueMap.jar ] && disabled bluemap; } || { [ "$jar" = MclanSkins.jar ] && disabled mclan_skins; }; then
         rm -f /data/plugins/"$jar"
     elif [ -f /opt/release/"$jar" ]; then
         cp /opt/release/"$jar" /data/plugins/."$jar".mclan-new

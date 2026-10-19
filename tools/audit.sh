@@ -74,6 +74,31 @@ if [[ ${started:-} ]]; then
     expect fail 'Geyser con acceso a servicios de Microsoft' 'Geyser sin cifrado: revisa la salida a Internet' lacks 'Unable to set up encryption'
 fi
 
+section 'Plugins (arranque actual)'
+# Estado de un plugin en la release activa: absent, off (desactivado por el operador) u on.
+plugin_state() {
+    python3 -c 'import json, sys; a = json.load(open("state/active.json")); k = sys.argv[1]
+print("absent" if k not in a else "off" if k in a.get("disabled_plugins", []) else "on")' "$1"
+}
+if [[ ${started:-} ]]; then
+    for pair in geyser:Geyser-Spigot floodgate:floodgate bluemap:BlueMap chunky:Chunky viaversion:ViaVersion \
+                viabackwards:ViaBackwards mclan_skins:MclanSkins; do
+        key=${pair%%:*} name=${pair#*:} state="$(plugin_state "$key")"
+        case $state in
+            absent) ;;
+            off) ok "$name desactivado por el operador" ;;
+            *) expect fail "$name habilitado" "$name no se habilitó en este arranque" has "Enabling $name v" ;;
+        esac
+    done
+    if [[ $(plugin_state mclan_skins) == on ]]; then
+        expect warn 'MclanSkins enganchado a Geyser (skins Bedrock completas)' \
+            'MclanSkins no puede modificar esta build de Geyser: Bedrock ve las skins de Geyser' lacks 'cannot be hooked'
+    fi
+fi
+geyser_debug="$(sed -n 's/^debug-mode: *//p' data/plugins/Geyser-Spigot/config.yml 2>/dev/null || true)"
+expect warn 'Geyser sin modo de depuración' 'Geyser en modo de depuración (debug-mode: true): llena el log' \
+    test "$geyser_debug" != true
+
 section 'Mapa BlueMap'
 if python3 -c 'import json,sys; sys.exit(0 if "bluemap" in json.load(open("state/active.json")) else 1)'; then
     expect fail "Web del mapa en http://$LAN_IP:8100/" "La web de BlueMap no responde en $LAN_IP:8100" \
@@ -96,6 +121,11 @@ if [[ -f /etc/systemd/system/mclan-panel.service ]]; then
     expect fail 'Regla sudo del panel limitada al helper' 'La regla sudo del panel no es la gestionada' \
         grep -qx "mclan-panel ALL=(root) NOPASSWD: /usr/bin/python3 -I $PROJECT_DIR/panel/helper.py \\*" /etc/sudoers.d/mclan-panel
     if [[ -f /etc/mclan-panel/initial-password ]]; then warn 'El panel conserva la contraseña inicial: cámbiala en Cuenta'; fi
+    textures="$(find /etc/mclan-panel/assets -maxdepth 1 -name '*.png' 2>/dev/null | wc -l)"
+    expect warn "Texturas del panel: $textures" 'Panel sin texturas: repite sudo panel/install.sh con el servidor en marcha' \
+        test "$textures" -ge 100
+    expect warn 'Catálogo de objetos del panel' 'Panel sin catálogo de objetos: repite sudo panel/install.sh' \
+        test -s /etc/mclan-panel/assets/items.json
 else
     warn 'Panel web no instalado (sudo panel/install.sh)'
 fi

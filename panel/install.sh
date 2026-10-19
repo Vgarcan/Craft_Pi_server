@@ -60,16 +60,40 @@ chown "$USER_NAME:$USER_NAME" "$cert" "$key"
 chmod 0600 "$key"
 chmod 0644 "$cert"
 
-# Texturas de Minecraft para el panel: se extraen DENTRO del contenedor del cliente que BlueMap
-# descargó de Mojang, y el host sólo acepta la lista cerrada de PNG. No se suben al repositorio.
+# Texturas de Minecraft y catálogo de objetos para el panel: se extraen DENTRO del contenedor del
+# cliente que BlueMap descargó de Mojang, y el host sólo acepta la lista cerrada. No se suben al
+# repositorio. En una instalación nueva BlueMap descarga el cliente unos minutos después del primer
+# arranque: se espera hasta MCLAN_ASSETS_WAIT segundos (600 por defecto) si el servidor está en marcha.
+compose() {
+    (cd "$PROJECT_DIR" && docker compose --project-name minecraft-lan --project-directory . --env-file .env -f compose.yaml "$@")
+}
+client_ready() {
+    compose exec -T minecraft python3 -c \
+        'import glob, sys; sys.exit(0 if glob.glob("/data/bluemap/minecraft-client-*.jar") else 1)' >/dev/null 2>&1
+}
+running="$(compose ps --status running --quiet minecraft 2>/dev/null || true)"
+bluemap="$(python3 -I -c 'import json, sys; a = json.load(open(sys.argv[1]))
+print("on" if "bluemap" in a and "bluemap" not in a.get("disabled_plugins", []) else "off")' "$PROJECT_DIR/state/active.json")"
+wait_seconds="${MCLAN_ASSETS_WAIT:-600}"
+[[ $wait_seconds =~ ^[0-9]{1,5}$ ]] || wait_seconds=600
+if [[ -n $running && $bluemap == on ]] && ! client_ready; then
+    echo "Esperando a que BlueMap descargue el cliente de Minecraft para las texturas y el catálogo de objetos (máximo $((wait_seconds / 60)) min)..."
+    for ((waited = 0; waited < wait_seconds; waited += 10)); do
+        client_ready && break
+        sleep 10
+    done
+fi
 assets="$CONFIG_DIR/assets"
 tarball="$(mktemp "$CONFIG_DIR/.assets.XXXXXX")"
-if (cd "$PROJECT_DIR" && docker compose --project-name minecraft-lan --project-directory . --env-file .env \
-        -f compose.yaml exec -T minecraft python3 - < panel/extract_assets.py) > "$tarball" 2>/dev/null \
+if [[ -n $running ]] && compose exec -T minecraft python3 - < "$PROJECT_DIR/panel/extract_assets.py" > "$tarball" 2>/dev/null \
    && python3 -I "$PROJECT_DIR/panel/install_assets.py" "$assets" "$USER_NAME" < "$tarball"; then
     chown "$USER_NAME:$USER_NAME" "$assets"
 else
-    echo 'Aviso: texturas no disponibles (servidor parado o BlueMap sin cliente). El panel usará su estilo CSS.' >&2
+    if [[ -z $running ]]; then reason='el servidor está parado'
+    elif [[ $bluemap == off ]]; then reason='BlueMap está desactivado (sudo ./manage.sh plugin bluemap on)'
+    else reason='BlueMap aún no ha descargado el cliente de Minecraft'; fi
+    echo "Aviso: sin texturas ni catálogo de objetos porque $reason. El panel funciona con su estilo CSS;" >&2
+    echo '       repite sudo panel/install.sh más tarde para añadirlos (conserva contraseña y certificado).' >&2
 fi
 rm -f "$tarball"
 

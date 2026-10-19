@@ -14,7 +14,8 @@ from .versions import managed_jars
 
 RUNTIME_FILES = ('Dockerfile', 'entrypoint.sh', 'probe.py', 'bluemap-setup.sh')
 # Plugins gestionados que el operador puede desactivar para ahorrar recursos.
-OPTIONAL_PLUGINS = ('bluemap',)
+# Plugins que el operador puede desactivar (manage.sh plugin NOMBRE off).
+OPTIONAL_PLUGINS = ('bluemap', 'mclan_skins')
 # Plantillas Compose publicadas antes de la actual. Sólo un compose.yaml idéntico a
 # una de ellas se considera gestionado y sustituible por manage.sh update.
 PREVIOUS_TEMPLATES = {
@@ -143,18 +144,10 @@ class Runtime:
         staged = release / 'versions.lock.json'
         existing = read_json(staged) if staged.exists() else {}
         lock['java_base'] = existing.get('java_base') or pin_temurin(f"{lock['java']}-jre-jammy")
-        built = [key for key in addons.ADDONS if key in lock]
-        if built:
+        if any(key in lock for key in addons.ADDONS):
             # El JDK sólo compila los addons; la imagen del servidor sigue usando el JRE.
             lock['jdk_base'] = existing.get('jdk_base') or pin_temurin(f"{lock['java']}-jdk-jammy")
-            for key in built:
-                lock[key] = dict(lock[key])
-                if existing.get(key, {}).get('source_sha256') == lock[key]['source_sha256'] \
-                        and (release / addons.ADDONS[key][1]).exists() \
-                        and sha256(release / addons.ADDONS[key][1]) == existing[key].get('sha256'):
-                    lock[key]['sha256'] = existing[key]['sha256']
-                else:
-                    lock[key]['sha256'] = sha256(addons.build(self.root, release, lock, key))
+            self.build_addons(lock, release, existing)
         # La imagen se identifica también por el código de arranque/salud y la base Java.
         import hashlib
         material = lock['java_base'] + ''.join(sha256(self.root / 'docker' / n) for n in RUNTIME_FILES)
@@ -167,6 +160,24 @@ class Runtime:
         write_json(staged, lock)
         release.chmod(0o755)
         return lock
+
+    def build_addons(self, lock, release, existing):
+        """Compila los addons de la release (o reutiliza los ya compilados con el mismo código)."""
+        for key in [key for key in addons.ADDONS if key in lock]:
+            lock[key] = dict(lock[key])
+            jar = release / addons.ADDONS[key][1]
+            if existing.get(key, {}).get('source_sha256') == lock[key]['source_sha256'] and jar.exists() \
+                    and sha256(jar) == existing[key].get('sha256'):
+                lock[key]['sha256'] = existing[key]['sha256']
+                continue
+            try:
+                lock[key]['sha256'] = sha256(addons.build(self.root, release, lock, key))
+            except Error as exc:
+                # Un addon desactivado no bloquea la actualización: la release queda sin él.
+                if key not in lock.get('disabled_plugins', []):
+                    raise Error(f'{exc} Para actualizar sin él: manage.sh plugin {key} off, y repite.') from exc
+                LOG.warning('%s no compila con esta release y está desactivado: se omite (%s).', key, exc)
+                del lock[key]
 
     def activate(self, active):
         # La marca se escribe ANTES desde update/restore para detectar interrupciones.
@@ -353,8 +364,10 @@ def validate_diagnostic(diagnostic, active, protocol):
     enabled = {p['name'].lower() for p in plugins if p.get('enabled') is True}
     if not {'geyser-spigot', 'floodgate'} <= enabled:
         raise Error('Geyser y Floodgate no aparecen ambos habilitados en Paper.')
-    if plugin_active(active, 'bluemap') and 'bluemap' not in enabled:
-        raise Error('BlueMap forma parte de la release pero no aparece habilitado en Paper.')
+    for key, name in (('bluemap', 'BlueMap'), ('chunky', 'Chunky'), ('viaversion', 'ViaVersion'),
+                      ('viabackwards', 'ViaBackwards'), ('mclan_skins', 'MclanSkins')):
+        if plugin_active(active, key) and name.lower() not in enabled:
+            raise Error(f'{name} forma parte de la release pero no aparece habilitado en Paper.')
     info = diagnostic['versionInfo']['mcInfo']
     if diagnostic['bootstrapInfo'].get('onlineMode') is not True:
         raise Error('El servidor Java cargado no tiene online-mode habilitado.')

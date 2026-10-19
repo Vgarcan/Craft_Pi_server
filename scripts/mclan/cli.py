@@ -52,7 +52,7 @@ def parser():
     rebind.add_argument('ip')
     rebind.add_argument('--timeout', type=int, default=900)
     plugin = commands.add_parser('plugin', help='Activar o desactivar un plugin opcional (reinicia si estaba en marcha)')
-    plugin.add_argument('name', choices=['bluemap'])
+    plugin.add_argument('name', choices=['bluemap', 'mclan_skins'])
     plugin.add_argument('state', choices=['on', 'off'])
     plugin.add_argument('--timeout', type=int, default=900)
     world = commands.add_parser('world', help='Biblioteca de mundos (hasta 50, uno activo)')
@@ -183,6 +183,9 @@ def update(runtime, args, client):
     project_changed = template_changed or runtime.runtime_drift(active)
     requested = args.minecraft_version or active['minecraft']
     proposal = versions.resolve(client, requested)
+    # Lo que el operador desactivó sigue desactivado en la release nueva.
+    if active.get('disabled_plugins'):
+        proposal['disabled_plugins'] = list(active['disabled_plugins'])
     for label, lock in (('Actual', active), ('Propuesta', proposal)):
         extras = ''.join(f"; {name} {lock[key]['version']}" for key, name in versions.EXTRA_PLUGINS if key in lock)
         print(f"{label}: Minecraft {lock['minecraft']}; Paper {lock['paper']['build']}; "

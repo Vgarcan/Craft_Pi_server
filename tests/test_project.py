@@ -523,9 +523,12 @@ class ProtocolTests(unittest.TestCase):
 
 
 class DiagnosticTests(unittest.TestCase):
+    OPTIONAL = {'bluemap': 'BlueMap', 'chunky': 'Chunky', 'viaversion': 'ViaVersion', 'viabackwards': 'ViaBackwards',
+                'mclan_skins': 'MclanSkins'}
+
     def release(self):
-        """Release sin BlueMap: el diagnóstico base sólo contiene Geyser y Floodgate."""
-        return {k: v for k, v in versions.resolve(FakeClient()).items() if k != 'bluemap'}
+        """Release mínima: el diagnóstico base sólo contiene Geyser y Floodgate."""
+        return {k: v for k, v in versions.resolve(FakeClient()).items() if k not in self.OPTIONAL}
 
     def diagnostic(self):
         return {'bootstrapInfo': {'onlineMode': True, 'plugins': [
@@ -554,15 +557,20 @@ class DiagnosticTests(unittest.TestCase):
             else: diagnostic['gitInfo']['buildNumber'] = '1'
             with self.assertRaises(Error): validate_diagnostic(diagnostic, self.release(), 999)
 
-    def test_bluemap_must_be_enabled_when_in_release(self):
+    def test_every_plugin_of_the_release_must_be_enabled(self):
         active = versions.resolve(FakeClient())
         diagnostic = self.diagnostic()
         with self.assertRaises(Error): validate_diagnostic(diagnostic, active, 999)
-        validate_diagnostic(diagnostic, dict(active, disabled_plugins=['bluemap']), 999)
-        diagnostic['bootstrapInfo']['plugins'].append({'name': 'BlueMap', 'enabled': True})
+        for key, name in self.OPTIONAL.items():
+            diagnostic['bootstrapInfo']['plugins'].append({'name': name, 'enabled': True})
         validate_diagnostic(diagnostic, active, 999)
-        old = {k: v for k, v in active.items() if k != 'bluemap'}
-        validate_diagnostic(self.diagnostic(), old, 999)
+        # Un plugin desactivado por el operador no se exige; uno que falta sí.
+        without = copy.deepcopy(diagnostic)
+        without['bootstrapInfo']['plugins'] = [p for p in without['bootstrapInfo']['plugins']
+                                               if p['name'] not in ('BlueMap', 'MclanSkins')]
+        validate_diagnostic(without, dict(active, disabled_plugins=['bluemap', 'mclan_skins']), 999)
+        with self.assertRaises(Error): validate_diagnostic(without, dict(active, disabled_plugins=['bluemap']), 999)
+        validate_diagnostic(self.diagnostic(), self.release(), 999)  # release antigua sin opcionales
 
     def test_disabled_bedrock_identity_validation_is_rejected(self):
         diagnostic = self.diagnostic()
@@ -781,6 +789,44 @@ class BackupTests(unittest.TestCase):
         real.set_plugin('bluemap', True)
         self.assertEqual((self.root / '.env').read_text(), env_before)
         with self.assertRaises(Error): real.set_plugin('geyser', False)
+
+    def test_mclan_skins_can_be_disabled_and_a_failed_build_only_blocks_when_enabled(self):
+        real = Runtime(self.root)
+        if 'mclan_skins' in self.active:
+            active = real.set_plugin('mclan_skins', False)
+            self.assertEqual(active['disabled_plugins'], ['mclan_skins'])
+            self.assertIn('DISABLED_PLUGINS=mclan_skins\n', (self.root / '.env').read_text())
+            real.set_plugin('mclan_skins', True)
+        self.assertIn('disabled mclan_skins', (ROOT / 'docker/entrypoint.sh').read_text())
+        release = self.root / 'releases/new'
+        release.mkdir(parents=True)
+        entry = {'version': '1.2.0', 'source_sha256': 'f' * 64, 'build': 'local'}
+        with patch('mclan.runtime.addons.build', side_effect=Error('javac failed')):
+            lock = {'mclan_skins': dict(entry)}
+            with self.assertRaisesRegex(Error, 'plugin mclan_skins off'):
+                real.build_addons(lock, release, {})
+            lock = {'mclan_skins': dict(entry), 'disabled_plugins': ['mclan_skins']}
+            real.build_addons(lock, release, {})
+            self.assertNotIn('mclan_skins', lock)
+        # El mismo código ya compilado se reutiliza sin volver a compilar.
+        (release / 'MclanSkins.jar').write_bytes(b'jar')
+        existing = {'mclan_skins': dict(entry, sha256=sha256(release / 'MclanSkins.jar'))}
+        with patch('mclan.runtime.addons.build') as build:
+            lock = {'mclan_skins': dict(entry)}
+            real.build_addons(lock, release, existing)
+        build.assert_not_called()
+        self.assertEqual(lock['mclan_skins']['sha256'], existing['mclan_skins']['sha256'])
+
+    def test_update_keeps_plugins_the_operator_disabled(self):
+        args = argparse.Namespace(minecraft_version=None, plan=False, timeout=10)
+        self.runtime.running.return_value = False
+        active = dict(self.runtime.active(), disabled_plugins=['bluemap'])
+        self.runtime.activate(active)
+        self.runtime.validate.return_value = active
+        newer = dict(copy.deepcopy(self.active), id='d' * 20)
+        with patch('mclan.cli.versions.resolve', return_value=newer), patch('mclan.cli.confirm'):
+            cli.update(self.runtime, args, Mock())
+        self.assertEqual(self.runtime.stage.call_args.args[0]['disabled_plugins'], ['bluemap'])
 
     def test_manage_plugin_command_stops_toggles_and_restarts(self):
         self.runtime.running.return_value = True
