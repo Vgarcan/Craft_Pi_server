@@ -493,6 +493,22 @@
     });
   }
 
+  // Nivel de encantamiento: sólo hasta el máximo del encantamiento elegido (data-max).
+  function bindEnchantLevels(root) {
+    $$('[data-enchant]', root).forEach((enchant) => {
+      const level = $('[data-enchant-level]', enchant.form);
+      if (!level || enchant.dataset.bound) return;
+      enchant.dataset.bound = '1';
+      const limit = () => {
+        const max = Number(enchant.selectedOptions[0]?.dataset.max || 5);
+        $$('option', level).forEach((o) => { o.disabled = Number(o.value) > max; });
+        if (Number(level.value) > max) level.value = String(max);
+      };
+      enchant.addEventListener('change', limit);
+      limit();
+    });
+  }
+
   // Editor de casillas: la página con ?slot=… trae la tarjeta #slot-editor; con JS se abre en una ventana.
   function slotDialog() {
     let dialog = $('dialog.slot-dialog');
@@ -517,6 +533,7 @@
       dialog.dataset.href = href;
       dialog.replaceChildren(editor);
       $$('[data-item-search]', dialog).forEach(bindItemSearch);
+      bindEnchantLevels(dialog);
       if (!dialog.open) dialog.showModal();
     } catch {
       location.href = href;
@@ -547,14 +564,7 @@
       $('input[name="count"]', b.closest('form')).value = b.dataset.count;
     }));
 
-    const enchant = $('[data-enchant]', root);
-    const level = $('[data-enchant-level]', root);
-    const limit = () => {
-      const max = Number(enchant.selectedOptions[0]?.dataset.max || 5);
-      $$('option', level).forEach((o) => { o.disabled = Number(o.value) > max; });
-      if (Number(level.value) > max) level.value = String(max);
-    };
-    if (enchant && level) { enchant.addEventListener('change', limit); limit(); }
+    bindEnchantLevels(root);
 
     const counter = $('[data-counter]', root);
     const out = $('[data-counter-out]', root);

@@ -71,7 +71,6 @@ SLOTS = (tuple(f'hotbar.{i}' for i in range(9)) + tuple(f'inventory.{i}' for i i
          + tuple(f'enderchest.{i}' for i in range(27)))
 ARMOR_SLOTS = {'head': ('armor.head', 'Helmet'), 'chest': ('armor.chest', 'Chestplate'),
                'legs': ('armor.legs', 'Leggings'), 'feet': ('armor.feet', 'Boots')}
-GOD_LEVEL = 255       # nivel máximo de encantamiento desde el editor de casillas («modo dios»)
 NAME_LIMIT = 50       # nombre personalizado de un objeto
 STACK_LIMIT = 99      # cantidad máxima que admite una casilla
 
@@ -89,6 +88,89 @@ MAX_DURABILITY = {
     'fishing_rod': 64, 'shears': 238, 'flint_and_steel': 64, 'carrot_on_a_stick': 25, 'warped_fungus_on_a_stick': 100,
     'brush': 64, 'wolf_armor': 64,
 }
+
+# --- Reglas del juego para el editor de casillas ------------------------------------------------
+# Qué encantamientos admite cada tipo de objeto (Java 26.x), su nivel máximo (ENCHANTMENTS) y cuáles
+# no pueden ir juntos. Unbreaking y Mending valen para todo lo que tiene durabilidad.
+_DAMAGE = ('sharpness', 'smite', 'bane_of_arthropods')
+_TOOL = ('efficiency', 'fortune', 'silk_touch')
+_ARMOR = ('protection', 'fire_protection', 'blast_protection', 'projectile_protection', 'thorns')
+ENCHANTABLE = {
+    'sword': _DAMAGE + ('knockback', 'fire_aspect', 'looting', 'sweeping_edge'),
+    'spear': _DAMAGE + ('knockback', 'fire_aspect', 'looting'),
+    'axe': _DAMAGE + _TOOL,
+    'tool': _TOOL,
+    'helmet': _ARMOR + ('respiration', 'aqua_affinity'),
+    'chestplate': _ARMOR,
+    'leggings': _ARMOR + ('swift_sneak',),
+    'boots': _ARMOR + ('feather_falling', 'depth_strider', 'frost_walker', 'soul_speed'),
+    'bow': ('power', 'punch', 'flame', 'infinity'),
+    'crossbow': ('multishot', 'piercing', 'quick_charge'),
+    'trident': ('loyalty', 'riptide', 'channeling', 'impaling'),
+    'mace': ('density', 'breach', 'wind_burst', 'smite', 'bane_of_arthropods', 'fire_aspect'),
+    'fishing_rod': ('luck_of_the_sea', 'lure'),
+    'shears': ('efficiency',),
+    'durable': (),  # escudo, élitros, mechero…: sólo Unbreaking y Mending
+}
+EXCLUSIVE = (
+    {'sharpness', 'smite', 'bane_of_arthropods', 'density', 'breach'},
+    {'protection', 'fire_protection', 'blast_protection', 'projectile_protection'},
+    {'silk_touch', 'fortune'}, {'infinity', 'mending'}, {'riptide', 'loyalty'}, {'riptide', 'channeling'},
+    {'multishot', 'piercing'}, {'depth_strider', 'frost_walker'},
+)
+_EXACT = {'bow': 'bow', 'crossbow': 'crossbow', 'trident': 'trident', 'mace': 'mace', 'fishing_rod': 'fishing_rod',
+          'shears': 'shears', 'turtle_helmet': 'helmet', 'book': 'book', 'enchanted_book': 'book'}
+_SUFFIX = (('_sword', 'sword'), ('_spear', 'spear'), ('_pickaxe', 'tool'), ('_shovel', 'tool'), ('_hoe', 'tool'),
+           ('_axe', 'axe'), ('_helmet', 'helmet'), ('_chestplate', 'chestplate'), ('_leggings', 'leggings'),
+           ('_boots', 'boots'))
+
+
+def item_kind(item_id):
+    """Tipo de objeto a efectos de encantamientos (None: no se puede encantar)."""
+    if item_id in _EXACT:
+        return _EXACT[item_id]
+    for suffix, kind in _SUFFIX:
+        if item_id.endswith(suffix) and item_id in MAX_DURABILITY:
+            return kind
+    return 'durable' if item_id in MAX_DURABILITY else None
+
+
+def allowed_enchantments(item_id):
+    """Encantamientos que el juego permite en ese objeto (los libros admiten todos)."""
+    kind = item_kind(item_id)
+    if kind is None:
+        return ()
+    if kind == 'book':
+        return tuple(ENCHANTMENTS)
+    return ENCHANTABLE[kind] + ('unbreaking', 'mending')
+
+
+def conflicts(enchantment, current):
+    """Encantamientos ya presentes que no pueden convivir con `enchantment` (él mismo no cuenta)."""
+    clash = set().union(*(group for group in EXCLUSIVE if enchantment in group)) - {enchantment}
+    return sorted(clash & set(current))
+
+
+_ONE = {'potion', 'splash_potion', 'lingering_potion', 'totem_of_undying', 'saddle', 'cake', 'enchanted_book',
+        'writable_book', 'knowledge_book', 'debug_stick', 'goat_horn', 'spyglass', 'bundle', 'water_bucket',
+        'lava_bucket', 'milk_bucket', 'powder_snow_bucket', 'cod_bucket', 'salmon_bucket', 'pufferfish_bucket',
+        'tropical_fish_bucket', 'axolotl_bucket', 'tadpole_bucket', 'mushroom_stew', 'rabbit_stew', 'beetroot_soup',
+        'suspicious_stew', 'minecart', 'chest_minecart', 'furnace_minecart', 'hopper_minecart', 'tnt_minecart',
+        'command_block_minecart', 'iron_horse_armor', 'golden_horse_armor', 'diamond_horse_armor',
+        'leather_horse_armor', 'shulker_box'}
+_SIXTEEN = {'ender_pearl', 'snowball', 'egg', 'blue_egg', 'brown_egg', 'bucket', 'armor_stand', 'honey_bottle',
+            'written_book'}
+
+
+def max_stack(item_id):
+    """Cuántos caben en una casilla, como en el juego."""
+    if item_id in MAX_DURABILITY or item_id in _ONE or item_id.endswith(('_bed', '_boat', '_raft', '_shulker_box')) \
+            or item_id.startswith('music_disc_'):
+        return 1
+    if item_id in _SIXTEEN or item_id.endswith(('_sign', '_banner')):
+        return 16
+    return 64
+
 
 # Acciones que necesitan al jugador conectado (las de política funcionan también sin él).
 OFFLINE_OK = {'op', 'deop', 'ban', 'pardon'}

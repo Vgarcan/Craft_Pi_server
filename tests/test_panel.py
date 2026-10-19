@@ -298,14 +298,16 @@ class HelperValidationTests(unittest.TestCase):
             self.assertFalse(panel.player('11111111-2222-3333-4444-555555555555')['live'])
 
     def test_slot_editor_actions(self):
-        ok = (('slot-enchant', 'Steve', 'hotbar.0', 'sharpness', '255'), ('slot-enchant', 'Steve', 'armor.feet', 'mending', '1'),
+        ok = (('slot-enchant', 'Steve', 'hotbar.0', 'sharpness', '5'), ('slot-enchant', 'Steve', 'armor.feet', 'mending', '1'),
               ('slot-rename', 'Steve', 'enderchest.26', 'Bob "the" blade'), ('slot-count', 'Steve', 'inventory.26', '99'),
               ('slot-set', 'Steve', 'weapon.offhand', 'totem_of_undying', '1'), ('slot-clear', 'Steve', 'armor.head'),
               ('effect-remove', 'Steve', 'speed'))
         for argv in ok:
             with self.subTest(argv=argv):
                 helper.parse(['player-action', *argv])
-        bad = (('slot-enchant', 'Steve', 'hotbar.9', 'sharpness', '1'), ('slot-enchant', 'Steve', 'hotbar.0', 'sharpness', '256'),
+        bad = (('slot-enchant', 'Steve', 'hotbar.9', 'sharpness', '1'), ('slot-enchant', 'Steve', 'hotbar.0', 'sharpness', '6'),
+               ('slot-enchant', 'Steve', 'hotbar.0', 'mending', '2'), ('slot-set', 'Steve', 'hotbar.0', 'diamond_sword', '2'),
+               ('slot-set', 'Steve', 'hotbar.0', 'ender_pearl', '17'),
                ('slot-enchant', 'Steve', 'hotbar.0', 'flight', '1'), ('slot-rename', 'Steve', 'hotbar.0', 'x' * 51),
                ('slot-rename', 'Steve', 'hotbar.0', 'a\nb'), ('slot-count', 'Steve', 'hotbar.0', '100'),
                ('slot-set', 'Steve', 'inventory.27', 'dirt', '1'), ('slot-clear', 'Steve', 'container.0'),
@@ -316,11 +318,30 @@ class HelperValidationTests(unittest.TestCase):
         panel = helper.Panel.__new__(helper.Panel)
         steve = {'name': 'Steve', 'uuid': 'x', 'online': True}
         run = lambda action, *params: panel.player_commands(action, steve, list(params), {'Steve': steve})
-        words = run('slot-enchant', 'hotbar.0', 'sharpness', '255')[0]
+        sword = {'Slot': 0, 'id': 'minecraft:diamond_sword', 'count': 1,
+                 'components': {'minecraft:enchantments': {'minecraft:sharpness': 3}, 'minecraft:damage': 50}}
+        panel.live_entity = Mock(return_value={'Inventory': [sword, {'Slot': 1, 'id': 'minecraft:diamond_pickaxe'},
+                                                             {'Slot': 2, 'id': 'minecraft:dirt', 'count': 5}]})
+        words = run('slot-enchant', 'hotbar.0', 'sharpness', '5')[0]
         self.assertEqual(words[:5], ('item', 'modify', 'entity', 'Steve', 'hotbar.0'))
-        self.assertEqual(json.loads(words[5])['enchantments'], {'minecraft:sharpness': 255})
-        self.assertEqual(json.loads(run('slot-rename', 'hotbar.1', 'Bob "the" \\ blade')[0][5])['name']['text'], 'Bob "the" \\ blade')
-        self.assertEqual(json.loads(run('slot-repair', 'hotbar.1')[0][5]), {'type': 'minecraft:set_damage', 'damage': 1.0})
+        self.assertEqual(json.loads(words[5]), {'type': 'minecraft:set_enchantments', 'add': False,
+                                                'enchantments': {'minecraft:sharpness': 5}})
+        # Reglas del juego, contra el objeto que hay de verdad en la casilla.
+        self.assertEqual(run('slot-enchant', 'hotbar.0', 'smite', '5'), 'Smite cannot be combined with Sharpness.')
+        self.assertEqual(run('slot-enchant', 'hotbar.0', 'efficiency', '5'), 'A diamond sword cannot have Efficiency.')
+        self.assertEqual(run('slot-enchant', 'hotbar.2', 'mending', '1'), 'A dirt cannot have Mending.')
+        self.assertIsInstance(run('slot-enchant', 'hotbar.1', 'silk_touch', '1'), list)
+        self.assertEqual(run('slot-enchant', 'hotbar.7', 'mending', '1'), 'That slot is empty.')
+        self.assertEqual(run('slot-count', 'hotbar.0', '2'), 'A diamond sword stacks up to 1.')
+        self.assertIsInstance(run('slot-count', 'hotbar.2', '64'), list)
+        self.assertEqual(run('slot-repair', 'hotbar.2'), 'A dirt has no durability.')
+        self.assertEqual(run('slot-unenchant', 'hotbar.1'), 'That item has no enchantments.')
+        self.assertIsInstance(run('slot-unbreakable', 'hotbar.1'), list)
+        panel.live_entity = Mock(return_value=None)
+        self.assertEqual(run('slot-repair', 'hotbar.0'), 'Could not read their inventory.')
+        panel.live_entity = Mock(return_value={'Inventory': [sword]})
+        self.assertEqual(json.loads(run('slot-rename', 'hotbar.0', 'Bob "the" \\ blade')[0][5])['name']['text'], 'Bob "the" \\ blade')
+        self.assertEqual(json.loads(run('slot-repair', 'hotbar.0')[0][5]), {'type': 'minecraft:set_damage', 'damage': 1.0})
         self.assertEqual(run('slot-clear', 'armor.head')[0], ('item', 'replace', 'entity', 'Steve', 'armor.head', 'with', 'minecraft:air'))
         self.assertEqual(run('slot-set', 'hotbar.3', 'bow', '1')[0][-2:], ('minecraft:bow', '1'))
         self.assertEqual(run('effect-remove', 'speed')[0], ('effect', 'clear', 'Steve', 'minecraft:speed'))
@@ -990,7 +1011,9 @@ class PanelAppTests(unittest.TestCase):
         profile = dict(player, ok=True, xuid=1, ban=None, op_level=None, first_played=None, live=True, selected_slot=0,
                        vitals={'health': 20.0, 'food': 20, 'gamemode': 'survival', 'abilities': {}},
                        location={'dimension': 'overworld', 'pos': [1.0, 64.0, 2.0], 'death': None, 'respawn': None},
-                       inventory=[sword], ender_chest=[], effects=[{'id': 'speed', 'level': 2, 'seconds': 75}],
+                       inventory=[sword, dict(sword, slot='hotbar.1', id='apple', count=12, enchantments=[], damage=0,
+                                              max_damage=None, name=None)],
+                       ender_chest=[], effects=[{'id': 'speed', 'level': 2, 'seconds': 75}],
                        stats={'custom': {}}, advancements=[])
         calls = []
         def fake(argv, timeout=60):
@@ -1006,8 +1029,16 @@ class PanelAppTests(unittest.TestCase):
         self.assertNotIn(b'id="slot-editor"', page)
         editor = self.request('GET', f'/players/{uuid}?slot=hotbar.0', cookie=cookie)[2]
         self.assertIn(b'id="slot-editor"', editor)
-        for marker in (b'Hotbar slot 1', b'name="enchantment"', b'max="255"', b'value="slot-repair"', b'value="slot-duplicate"'):
+        for marker in (b'Hotbar slot 1', b'name="enchantment"', b'value="slot-repair"', b'value="slot-duplicate"',
+                       b'Sharpness (max V)', b'conflicts with Sharpness', b'This item does not stack'):
             self.assertIn(marker, editor)
+        section = editor.split(b'id="slot-editor"')[1].split(b'</section>')[0]
+        self.assertNotIn(b'value="efficiency"', section)  # una espada no admite Eficiencia
+        self.assertNotIn(b'255', section)
+        apple = self.request('GET', f'/players/{uuid}?slot=hotbar.1', cookie=cookie)[2]
+        for marker in (b'This item cannot be enchanted', b'max="64"', b'up to 64'):
+            self.assertIn(marker, apple)
+        self.assertNotIn(b'value="slot-repair"', apple)
         empty = self.request('GET', f'/players/{uuid}?slot=enderchest.5', cookie=cookie)[2]
         self.assertIn(b'Put an item here', empty)
         self.assertNotIn(b'id="slot-editor"', self.request('GET', f'/players/{uuid}?slot=../../x', cookie=cookie)[2])

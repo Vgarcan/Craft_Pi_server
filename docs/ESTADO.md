@@ -449,3 +449,16 @@ Tres revisiones independientes, de sólo lectura (documentación frente a códig
   - **RCON por trozos:** una respuesta de 6075 bytes llega entera (antes se cortaba en 4096), probada con un almacén temporal ya borrado.
   - **Despliegue:** `update` con la sonda nueva, `panel/install.sh` con las 5 siluetas de casilla (2228 texturas) y `tools/audit.sh` sin fallos.
 - **Pendiente de hardware:** el editor con un jugador conectado.
+
+## 0.9.1: el editor sigue las reglas del juego (19-10-2026)
+
+- **Petición del operador:** que el editor compruebe la lógica del juego y no permita cosas absurdas (nivel 9999999999).
+- **Cambio:** se retira el «modo dios» de nivel 255. El helper lee en vivo el objeto de la casilla y rechaza con un mensaje claro:
+  - un encantamiento que el objeto no admite (`catalog.allowed_enchantments`, por tipo de objeto; los libros admiten todos);
+  - un nivel por encima del máximo normal;
+  - un encantamiento incompatible con uno ya presente (`catalog.EXCLUSIVE`);
+  - una cantidad mayor que el tope del objeto (`catalog.max_stack`: 1, 16 o 64), también al poner un objeto;
+  - reparar o hacer irrompible algo sin durabilidad;
+  - quitar encantamientos a algo que no tiene.
+- **Editor:** sólo ofrece lo válido. Muestra los incompatibles desactivados con su motivo y los niveles hasta el máximo de cada encantamiento; si el objeto no se puede encantar o no se apila, lo dice.
+- **Pruebas:** 151, entre ellas espada con Sharpness frente a Smite, Efficiency en espada, encantar tierra, dos espadas en una casilla, perlas por encima de 16 y reparar tierra.

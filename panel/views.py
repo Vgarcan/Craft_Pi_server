@@ -500,32 +500,47 @@ class Views:
                            'value="1" inputmode="numeric"></label><button class="mc-btn primary">Place</button></div>'
                            '<div class="item-results js-only" data-item-results aria-live="polite"></div>', 'give-form'))
         else:
-            enchants = ''.join(f'<option value="{e(k)}" data-max="{m}">{e(label)} (normal max {self.roman(m)})</option>'
-                               for k, (label, m) in catalog.ENCHANTMENTS.items())
+            allowed = catalog.allowed_enchantments(item['id'])
+            current = [name for name, _ in item.get('enchantments', []) + item.get('stored_enchantments', [])]
+            options = []
+            for key in allowed:
+                label, maximum = catalog.ENCHANTMENTS[key]
+                clash = catalog.conflicts(key, current)
+                note = f' — conflicts with {", ".join(catalog.ENCHANTMENTS.get(c, (c,))[0] for c in clash)}' if clash else ''
+                options.append(f'<option value="{e(key)}" data-max="{maximum}"{" disabled" if clash else ""}>'
+                               f'{e(label)} (max {self.roman(maximum)}){e(note)}</option>')
+            levels = ''.join(f'<option value="{n}">{self.roman(n)}</option>' for n in range(1, 6))
+            if allowed:
+                enchant = ('<div class="pa-section"><h3>Enchant</h3>'
+                           + form('slot-enchant', f'<div class="row"><label>Enchantment<select name="enchantment" data-enchant>'
+                                  f'{"".join(options)}</select></label><label>Level<select name="level" data-enchant-level>'
+                                  f'{levels}</select></label><button class="mc-btn primary">Enchant</button></div>')
+                           + '<p class="muted small">Only what the game allows: enchantments this item accepts, up to their '
+                             'normal level, and never two that cannot go together (Sharpness and Smite, Silk Touch and '
+                             'Fortune, Infinity and Mending…).</p></div>')
+            else:
+                enchant = '<p class="muted">This item cannot be enchanted.</p>'
             durable = bool(item.get('max_damage'))
+            stack = catalog.max_stack(item['id'])
+            amount = (form('slot-count', f'<label>Amount<input type="number" name="count" min="1" max="{stack}" '
+                           f'value="{e(min(item.get("count") or 1, stack))}" inputmode="numeric"></label>'
+                           f'<button class="mc-btn">Set</button><span class="muted small">up to {stack}</span>', 'row')
+                      if stack > 1 else '<span class="muted small">This item does not stack.</span>')
             body = (
-                f'<div class="slot-preview"><div class="inv-slot big{" enchanted" if item.get("enchantments") else ""}">'
+                f'<div class="slot-preview"><div class="inv-slot big{" enchanted" if current else ""}">'
                 f'{self.item_icon(item["id"])}</div><div class="mc-tooltip static">{"".join(self.item_lines(item))}</div></div>'
-                + '<div class="pa-section"><h3>Enchant</h3>'
-                + form('slot-enchant', f'<div class="row"><label>Enchantment<select name="enchantment">{enchants}</select></label>'
-                       f'<label>Level<input type="number" name="level" min="1" max="{catalog.GOD_LEVEL}" value="5" '
-                       'inputmode="numeric"></label><button class="mc-btn primary">Enchant</button></div>')
-                + f'<p class="muted small">God mode: any enchantment on any item, up to level {catalog.GOD_LEVEL}. '
-                  'Levels above the normal maximum work for most combat and tool enchantments.</p></div>'
+                + enchant
                 + '<div class="pa-section"><h3>Item</h3><div class="row">'
-                + (quick('slot-repair', 'Repair') if durable else '')
+                + (quick('slot-repair', 'Repair') if durable and item.get('damage') else '')
                 + (quick('slot-unbreakable', 'Make unbreakable') if durable and not item.get('unbreakable') else '')
-                + (quick('slot-unenchant', 'Remove enchantments', 'danger')
-                   if item.get('enchantments') or item.get('stored_enchantments') else '')
+                + (quick('slot-unenchant', 'Remove enchantments', 'danger') if current else '')
                 + quick('slot-duplicate', 'Duplicate', '', 'Copy this item to the first free slot?')
                 + quick('slot-clear', 'Delete', 'danger', 'Delete this item? It cannot be undone.')
                 + '</div></div><div class="pa-section"><h3>Name and amount</h3><div class="row">'
                 + form('slot-rename', f'<label>Name<input type="text" name="text" required maxlength="{catalog.NAME_LIMIT}" '
                        f'value="{e(item.get("name") or "")}" placeholder="{e(self.item_name(item["id"]))}"></label>'
                        '<button class="mc-btn">Rename</button>', 'row')
-                + form('slot-count', f'<label>Amount<input type="number" name="count" min="1" max="{catalog.STACK_LIMIT}" '
-                       f'value="{e(item.get("count") or 1)}" inputmode="numeric"></label><button class="mc-btn">Set</button>', 'row')
-                + '</div></div>')
+                + amount + '</div></div>')
         offline = '' if p['online'] else '<div class="alert warn">The player is offline: changes need them in the game.</div>'
         return (f'<section class="panel wide slot-editor" id="slot-editor"><h2>{self.item_icon("anvil", "icon")}'
                 f'{e(self.slot_label(slot))}</h2>{offline}{body}<p>{close}</p></section>')

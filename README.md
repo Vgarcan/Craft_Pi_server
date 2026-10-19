@@ -256,12 +256,17 @@ Cada jugador tiene una ficha:
 
 Con el jugador conectado, todo se lee **en vivo**: una sola consulta `data get entity` trae vida, posición, inventario, cofre de ender y efectos. Desconectado, se muestra el último guardado.
 
-**Editor de casillas («modo dios»).** Pulsa cualquier casilla:
-- **Con un objeto:** encantarlo con cualquier encantamiento hasta nivel 255 (aunque no sea compatible con el objeto), quitarle los encantamientos, repararlo, hacerlo irrompible, renombrarlo, cambiar la cantidad (1–99), duplicarlo en la primera casilla libre o borrarlo.
+**Editor de casillas.** Pulsa cualquier casilla:
+- **Con un objeto:** encantarlo, quitarle los encantamientos, repararlo, hacerlo irrompible, renombrarlo, cambiar la cantidad, duplicarlo en la primera casilla libre o borrarlo.
 - **Vacía:** poner ahí cualquier objeto, con el mismo buscador.
 - **Efectos activos:** se pueden quitar uno a uno.
 
-Usa `/item modify` y `/item replace` con modificadores en JSON escapado; necesita al jugador conectado. Sin JavaScript, el editor aparece como una tarjeta (`?slot=hotbar.0`).
+**Sigue las reglas del juego**, y el helper lo comprueba contra lo que hay de verdad en la casilla:
+- **Encantamientos:** sólo los que admite ese objeto (una espada no lleva Efficiency y una manzana nada; los libros, todos), hasta su nivel normal (Sharpness V, Mending I), y nunca dos incompatibles (Sharpness, Smite y Bane; protecciones; Silk Touch y Fortune; Infinity y Mending; Riptide con Loyalty o Channeling; Multishot y Piercing; Depth Strider y Frost Walker).
+- **Cantidad:** el tope de cada objeto: 1 para herramientas, armas, armaduras, pociones, cubos llenos y otros que no se apilan; 16 para perlas, huevos, bolas de nieve, carteles o estandartes; 64 para el resto.
+- **Reparar e irrompible:** sólo en objetos con durabilidad.
+
+Las reglas están en `panel/catalog.py`. Usa `/item modify` (modificadores en JSON escapado con `type`, el formato de 26.x) y `/item replace`; necesita al jugador conectado. Sin JavaScript, el editor aparece como una tarjeta (`?slot=hotbar.0`).
 
 ![Acciones: dar objetos y kits](docs/images/profile-items.png)
 

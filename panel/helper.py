@@ -293,8 +293,9 @@ PLAYER_ACTIONS = {
     'enchant': (choice(*catalog.ENCHANTMENTS), integer(1, 5)),
     'pet': (choice(*catalog.PETS),),
     'message': (choice(*catalog.MESSAGE_KINDS), message_text),
-    # Editor de casillas («modo dios»): cualquier encantamiento hasta nivel 255 en cualquier objeto.
-    'slot-enchant': (choice(*catalog.SLOTS), choice(*catalog.ENCHANTMENTS), integer(1, catalog.GOD_LEVEL)),
+    # Editor de casillas: lo que el juego permite (objeto compatible, nivel máximo, sin incompatibles); el
+    # helper lo comprueba también contra el objeto que hay de verdad en la casilla (slot_commands).
+    'slot-enchant': (choice(*catalog.SLOTS), choice(*catalog.ENCHANTMENTS), integer(1, 5)),
     **{action: (choice(*catalog.SLOTS),) for action in ('slot-unenchant', 'slot-repair', 'slot-unbreakable',
                                                          'slot-clear', 'slot-duplicate')},
     'slot-rename': (choice(*catalog.SLOTS), item_name),
@@ -431,6 +432,29 @@ def profile_from(data, stats, advancements):
                   'used': top(stats.get('minecraft:used', {})), 'picked_up': top(stats.get('minecraft:picked_up', {}))},
         'advancements': done,
     }
+
+
+def game_rule_problem(action, item, params):
+    """Por qué el juego no permitiría esta acción sobre el objeto (o None si es válida)."""
+    label = item['id'].replace('_', ' ')
+    if action == 'slot-enchant':
+        enchantment, level = params[1], int(params[2])
+        if enchantment not in catalog.allowed_enchantments(item['id']):
+            return f'A {label} cannot have {catalog.ENCHANTMENTS[enchantment][0]}.'
+        current = [e for e, _ in item['enchantments'] + item['stored_enchantments']]
+        clash = catalog.conflicts(enchantment, current)
+        if clash:
+            names = ', '.join(catalog.ENCHANTMENTS.get(c, (c,))[0] for c in clash)
+            return f'{catalog.ENCHANTMENTS[enchantment][0]} cannot be combined with {names}.'
+        if level > catalog.ENCHANTMENTS[enchantment][1]:
+            return f'{catalog.ENCHANTMENTS[enchantment][0]} goes up to level {catalog.ENCHANTMENTS[enchantment][1]}.'
+    if action == 'slot-unenchant' and not (item['enchantments'] or item['stored_enchantments']):
+        return 'That item has no enchantments.'
+    if action in ('slot-repair', 'slot-unbreakable') and not item.get('max_damage'):
+        return f'A {label} has no durability.'
+    if action == 'slot-count' and int(params[1]) > catalog.max_stack(item['id']):
+        return f'A {label} stacks up to {catalog.max_stack(item["id"])}.'
+    return None
 
 
 def bluemap_render(console):
@@ -589,6 +613,15 @@ class Panel:
                 'ban': {k: bans[0].get(k) for k in ('reason', 'created', 'source', 'expires')} if bans else None,
                 'op_level': ops[0].get('level') if ops else None}
 
+    def current_item(self, name, slot):
+        """Objeto que hay ahora en la casilla del jugador, o un texto que explica por qué no se sabe."""
+        live = self.live_entity(name)
+        if live is None:
+            return 'Could not read their inventory.'
+        profile = profile_from(live, {}, {})
+        item = next((i for i in profile['inventory'] + profile['ender_chest'] if i['slot'] == slot), None)
+        return item or 'That slot is empty.'
+
     def live_entity(self, name):
         """Datos del jugador conectado (SNBT de «data get entity»), o None si no se pueden leer."""
         try:
@@ -712,6 +745,14 @@ class Panel:
         slot = params[0]
         def modify(modifier):
             return [('item', 'modify', 'entity', name, slot, json.dumps(modifier, ensure_ascii=False))]
+        if action in ('slot-enchant', 'slot-unenchant', 'slot-repair', 'slot-unbreakable', 'slot-rename', 'slot-count'):
+            # Las reglas del juego dependen del objeto que hay ahora en la casilla: se lee en vivo.
+            item = self.current_item(name, slot)
+            if isinstance(item, str):
+                return item
+            problem = game_rule_problem(action, item, params)
+            if problem:
+                return problem
         if action == 'slot-enchant':
             return modify({'type': 'minecraft:set_enchantments', 'add': False,
                            'enchantments': {f'minecraft:{params[1]}': int(params[2])}})
@@ -1041,8 +1082,12 @@ def parse(argv):
         if len(params) != len(checks):
             raise ValueError(f'{action} takes {len(checks)} value(s)')
         values = [check(value) for check, value in zip(checks, params)]
-        if action == 'enchant' and int(values[1]) > catalog.ENCHANTMENTS[values[0]][1]:
-            raise ValueError(f'{values[0]} goes up to level {catalog.ENCHANTMENTS[values[0]][1]}')
+        if action in ('enchant', 'slot-enchant'):
+            enchantment, level = values[-2], int(values[-1])
+            if level > catalog.ENCHANTMENTS[enchantment][1]:
+                raise ValueError(f'{enchantment} goes up to level {catalog.ENCHANTMENTS[enchantment][1]}')
+        if action == 'slot-set' and int(values[2]) > catalog.max_stack(values[1]):
+            raise ValueError(f'{values[1]} stacks up to {catalog.max_stack(values[1])}')
         if action == 'tp-coords' and values[2] == 'surface' and values[0] != 'overworld':
             raise ValueError('surface teleports only work in the overworld')
         if action in ('tp-to', 'bring') and values[0] == name:
