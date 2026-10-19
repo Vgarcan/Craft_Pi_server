@@ -328,4 +328,10 @@ Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa
   - Al iniciar sesión, el addon construye la `SerializedSkin` completa a partir del JWT firmado del cliente, con `jose4j`, incluido en Geyser.
   - Sustituye la `UpstreamSession` de cada sesión por `SkinUpstream`. Esta cambia la skin de cada entrada de `PlayerListPacket` cuyo XUID corresponde a un jugador Bedrock.
   - La caché de Geyser (1.1.0) y `SessionSkinApplyEvent` ya no se usan.
-- **Pendiente de hardware:** comprobación visual. Los cambios de skin en mitad de la partida siguen exigiendo reconectar.
+- **Verificado en hardware (19-10-2026, 00:09):** con un jugador Bedrock y uno Java conectados a la vez:
+  - En Bedrock se ve la skin persona completa del jugador Bedrock, con su forma.
+  - En Java ese jugador aparece con Efe, la skin por defecto que corresponde a su UUID.
+  - El registro muestra «Complete skin of Xeministrator: 256x256, persona=true, pieces=11, animations=1» en cada conexión y ningún error.
+- **Java de la misma versión** (26.3, cuenta verificada) entra con ViaVersion instalado. Falta probar QuestCraft con una versión distinta.
+- **Depuración de Geyser retirada:** `debug-mode: false`, idéntico a la copia previa. Se aplica en el siguiente reinicio.
+- **Pendiente:** los cambios de skin en mitad de la partida siguen exigiendo reconectar.
