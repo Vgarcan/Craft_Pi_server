@@ -444,7 +444,8 @@ Tres revisiones independientes, de sólo lectura (documentación frente a códig
 - **Pruebas:**
   - 151 automatizadas.
   - Vista previa en Chromium con datos inventados, a 1280 y 390 px: maqueta, tooltip, editor en ventana, cierre y sin desbordes.
-- **Pendiente de hardware:**
-  - sintaxis real de `/item modify` con cada modificador en Paper 26.3;
-  - lectura en vivo de un inventario grande;
-  - prueba con un jugador conectado.
+- **Verificado en hardware (19-10-2026, 14:30):**
+  - **Modificadores:** en 26.3 el tipo de un modificador en línea va en `type`, no en `function` («No key type»). Corregido, todos los del editor se analizan bien, y uno inventado se rechaza.
+  - **RCON por trozos:** una respuesta de 6075 bytes llega entera (antes se cortaba en 4096), probada con un almacén temporal ya borrado.
+  - **Despliegue:** `update` con la sonda nueva, `panel/install.sh` con las 5 siluetas de casilla (2228 texturas) y `tools/audit.sh` sin fallos.
+- **Pendiente de hardware:** el editor con un jugador conectado.
