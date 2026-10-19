@@ -422,3 +422,9 @@ Tres revisiones independientes, de sólo lectura (documentación frente a códig
   - Ruta nueva de la contraseña inicial (`/etc/mclan-panel/data/initial-password`).
   - Se retira el paquete ZIP original de la guía.
 - **Pruebas:** 145.
+- **Verificado en hardware (19-10-2026, 13:00):**
+  - `update` compila MclanSkins 1.2.1 y pasa la verificación, que ahora exige los siete plugins.
+  - `panel/install.sh` migra la organización anterior: `/etc/mclan-panel` queda `root:mclan-panel 0750`, la clave `root:mclan-panel 0640`, las texturas de root y `data/panel.json` del panel. Se conservan la huella del certificado y la contraseña.
+  - El panel escribe en `data/` pero no en la raíz, lee la clave y sirve login y texturas.
+  - Ataque simulado: un enlace `data/panel.json → /etc/hostname` hace que `panel/install.sh` se niegue («no es un archivo normal») y `/etc/hostname` queda intacto. Después se restauró la configuración.
+  - `tools/audit.sh --verify`: sin fallos.
