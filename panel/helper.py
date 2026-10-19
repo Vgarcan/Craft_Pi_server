@@ -996,7 +996,9 @@ class Panel:
             log = read_data(self.runtime.data, 'logs/latest.log', 1024**2, tail=True).decode(errors='replace')
         except OSError:
             log = ''
-        events = [COLOR.sub('', line).strip() for line in log.splitlines() if '[MclanPacks]' in line][-15:]
+        # Lo que escribe el addon; las líneas de carga de Paper («Loading/Enabling…») no aportan.
+        events = [COLOR.sub('', line).strip() for line in log.splitlines() if '[MclanPacks] ' in line
+                  and not re.search(r'\[MclanPacks\] (?:Loading|Enabling|Disabling) ', line)][-15:]
         stored = sum(p.stat().st_size for p in library.files.iterdir()
                      if p.is_file() and not p.is_symlink()) if library.files.is_dir() else 0
         installed = 'mclan_packs' in active and 'mclan_packs' not in active.get('disabled_plugins', [])

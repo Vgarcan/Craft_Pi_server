@@ -541,7 +541,8 @@ class HelperValidationTests(unittest.TestCase):
             (root / 'state/active.json').write_text(json.dumps({'minecraft': '26.3', 'lan_ip': '192.168.1.50', 'mclan_packs': {}}))
             (root / 'data/logs').mkdir(parents=True)
             (root / 'data/logs/latest.log').write_text(
-                '[17:00:00 INFO]: Done (12.0s)!\n[17:00:01 INFO]: [MclanPacks] \u00a7aNo resource pack selected.\n'
+                '[17:00:00 INFO]: Done (12.0s)!\n[16:32:11] [Server thread/INFO]: [MclanPacks] Enabling MclanPacks v1.0.0\n'
+                '[17:00:01 INFO]: [MclanPacks] \u00a7aNo resource pack selected.\n'
                 '[17:05:00 INFO]: [MclanPacks] Steve (1.21.5): Faithful 32x 1.21.5 SUCCESSFULLY_LOADED\n')
             listing = helper.Panel(root).packs()
         self.assertTrue(listing['installed'])
