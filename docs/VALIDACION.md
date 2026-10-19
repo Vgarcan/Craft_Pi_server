@@ -127,6 +127,9 @@ Registra los resultados al ejecutar la guía desde cero:
 | Respeto de parada manual tras reboot | Pendiente | Permanece parado hasta `start` |
 | Backup y restore de prueba | **Backup verificado**; restore ensayado en copia aislada | Copia verificada y retorno al estado previo |
 | Carga inicial de 2–4 jugadores | Pendiente | Memoria, CPU, temperatura y rendimiento percibido |
+| Paquete de recursos en Java 26.3 | Pendiente (servido y verificado por SHA-1 desde el host) | Aviso con crédito, aceptar, texturas 32x; rechazo en modo opcional y obligatorio |
+| Paquete de recursos en QuestCraft 1.21.5 | Pendiente | Que reciba la variante 1.21.5 (`mclanpacks status`) y la cargue |
+| Paquete de recursos en Bedrock | Pendiente | Que Faithful llegue al conectar y se vean las texturas |
 
 Sólo después de estas pruebas puede afirmarse que la instalación concreta funciona en tu Raspberry Pi y con tus clientes.
 

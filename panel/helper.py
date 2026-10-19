@@ -24,7 +24,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 
-from mclan import cli, host  # noqa: E402
+from mclan import cli, host, packs  # noqa: E402
 from mclan.common import Error, LOG, run  # noqa: E402
 from mclan import nbt, snbt  # noqa: E402
 from mclan.safefs import open_folder, read_data, read_gzip_data, write_data  # noqa: E402
@@ -987,6 +987,21 @@ class Panel:
         Library(self.runtime).rename(wid, name)
         return {'ok': True, 'output': 'World renamed.'}
 
+    def packs(self):
+        """Catálogo, selección y lo que MclanPacks registró en esta sesión del servidor (cargas y errores)."""
+        active = self.runtime.active()
+        library = packs.Packs(self.runtime)
+        listing = library.describe(active['minecraft'])
+        try:
+            log = read_data(self.runtime.data, 'logs/latest.log', 1024**2, tail=True).decode(errors='replace')
+        except OSError:
+            log = ''
+        events = [COLOR.sub('', line).strip() for line in log.splitlines() if '[MclanPacks]' in line][-15:]
+        stored = sum(p.stat().st_size for p in library.files.iterdir()
+                     if p.is_file() and not p.is_symlink()) if library.files.is_dir() else 0
+        installed = 'mclan_packs' in active and 'mclan_packs' not in active.get('disabled_plugins', [])
+        return {**listing, 'installed': installed, 'minecraft': active['minecraft'], 'events': events, 'stored': stored}
+
     def audit(self):
         result = subprocess.run([str(self.root / 'tools/audit.sh')], capture_output=True, text=True,
                                 timeout=120, check=False, stdin=subprocess.DEVNULL)
@@ -1093,6 +1108,22 @@ def parse(argv):
         if action in ('tp-to', 'bring') and values[0] == name:
             raise ValueError('choose another player')
         return verb, [action, name, *values], True
+    if verb in ('packs', 'pack-off', 'pack-clean'):
+        expect(0)
+        return verb, [], False  # manage.sh toma el bloqueo
+    if verb == 'pack-use':
+        # pack-use ID optional|required on|off [VERSIÓN...]: sólo paquetes y variantes del catálogo.
+        if len(args) < 3:
+            raise ValueError('pack-use needs a pack, a mode and the Bedrock switch')
+        pack_id, mode, bedrock, java = args[0], choice('optional', 'required')(args[1]), choice('on', 'off')(args[2]), args[3:]
+        pack = packs.CATALOG.get(pack_id)
+        if not pack or pack.get('link_only'):
+            raise ValueError('unknown pack')
+        if any(version not in pack['java'] for version in java):
+            raise ValueError('unknown Java version for this pack')
+        if not java and bedrock == 'off':
+            raise ValueError('choose at least one Java version or Bedrock')
+        return verb, [pack_id, mode, bedrock, *dict.fromkeys(java)], False
     if verb == 'bluemap-render':
         expect(1)
         return verb, [choice('on', 'off')(args[0])], True
@@ -1146,6 +1177,15 @@ def execute(panel, verb, args):
         return panel.whitelist_switch(*args)
     if verb == 'whitelist-open-for':
         return panel.open_for(*args)
+    if verb == 'packs':
+        return {'ok': True, **panel.packs()}
+    if verb == 'pack-use':
+        pack_id, mode, bedrock, *java = args
+        command = ['pack', 'use', pack_id, '--bedrock', bedrock]
+        command += [word for version in java for word in ('--java', version)] if java else ['--no-java']
+        return panel.manage(*command, *(['--required'] if mode == 'required' else []))
+    if verb in ('pack-off', 'pack-clean'):
+        return panel.manage('pack', verb.split('-')[1])
     if verb == 'bluemap-render':
         return panel.bluemap_render_switch(*args)
     if verb == 'plugin':

@@ -513,6 +513,45 @@ class HelperValidationTests(unittest.TestCase):
             with self.subTest(argv=argv), self.assertRaises(ValueError):
                 helper.parse(argv)
 
+    def test_pack_verbs_are_validated_and_become_manage_commands(self):
+        self.assertEqual(helper.parse(['pack-use', 'faithful-32x', 'optional', 'on', '26.3', '1.21.5', '26.3']),
+                         ('pack-use', ['faithful-32x', 'optional', 'on', '26.3', '1.21.5'], False))
+        self.assertEqual(helper.parse(['pack-use', 'faithful-32x', 'required', 'on'])[1], ['faithful-32x', 'required', 'on'])
+        self.assertEqual(helper.parse(['packs']), ('packs', [], False))
+        for argv in (['pack-use', 'bare-bones', 'optional', 'on'], ['pack-use', 'faithful-32x', 'optional', 'on', '1.8.9'],
+                     ['pack-use', 'faithful-32x', 'always', 'on'], ['pack-use', 'faithful-32x', 'optional', 'yes'],
+                     ['pack-use', 'faithful-32x', 'optional', 'off'], ['pack-use', 'faithful-32x'],
+                     ['pack-use', '../x', 'optional', 'on'], ['pack-off', 'now'], ['packs', 'x']):
+            with self.subTest(argv=argv), self.assertRaises(ValueError):
+                helper.parse(argv)
+        panel = Mock()
+        helper.execute(panel, 'pack-use', ['faithful-32x', 'required', 'off', '1.21.5'])
+        panel.manage.assert_called_with('pack', 'use', 'faithful-32x', '--bedrock', 'off', '--java', '1.21.5', '--required')
+        helper.execute(panel, 'pack-use', ['faithful-32x', 'optional', 'on'])
+        panel.manage.assert_called_with('pack', 'use', 'faithful-32x', '--bedrock', 'on', '--no-java')
+        helper.execute(panel, 'pack-off', [])
+        panel.manage.assert_called_with('pack', 'off')
+        helper.execute(panel, 'pack-clean', [])
+        panel.manage.assert_called_with('pack', 'clean')
+
+    def test_pack_listing_includes_this_session_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'state').mkdir()
+            (root / 'state/active.json').write_text(json.dumps({'minecraft': '26.3', 'lan_ip': '192.168.1.50', 'mclan_packs': {}}))
+            (root / 'data/logs').mkdir(parents=True)
+            (root / 'data/logs/latest.log').write_text(
+                '[17:00:00 INFO]: Done (12.0s)!\n[17:00:01 INFO]: [MclanPacks] \u00a7aNo resource pack selected.\n'
+                '[17:05:00 INFO]: [MclanPacks] Steve (1.21.5): Faithful 32x 1.21.5 SUCCESSFULLY_LOADED\n')
+            listing = helper.Panel(root).packs()
+        self.assertTrue(listing['installed'])
+        self.assertEqual(listing['events'], ['[17:00:01 INFO]: [MclanPacks] No resource pack selected.',
+                                             '[17:05:00 INFO]: [MclanPacks] Steve (1.21.5): Faithful 32x 1.21.5 SUCCESSFULLY_LOADED'])
+        self.assertIsNone(listing['active'])
+        faithful = next(p for p in listing['packs'] if p['id'] == 'faithful-32x')
+        self.assertEqual(faithful['server_variant'], '26.3')
+        self.assertEqual(listing['stored'], 0)
+
     def test_floodgate_uuid_from_xuid(self):
         self.assertEqual(helper.floodgate_uuid('2535412345678901'), '00000000-0000-0000-0009-01f1b0392c35')
 
@@ -1094,6 +1133,51 @@ class PanelAppTests(unittest.TestCase):
             self.assertEqual(self.app.jobs.runner.call_args.args[0], argv)
         self.request('POST', '/world', f'csrf={csrf}&do=world-create&name=New&seed=7', cookie)
         self.assertEqual(self.calls[-1], ['world-create', 'New', '7'])
+
+    def test_resource_packs_section_and_actions(self):
+        cookie, csrf = self.login()
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        from mclan import packs
+        with tempfile.TemporaryDirectory() as directory:
+            listing = packs.Packs(Mock(root=Path(directory))).describe('26.3')
+        faithful = next(p for p in listing['packs'] if p['id'] == 'faithful-32x')
+        for variant in faithful['java']:
+            variant['enabled'] = variant['label'] in ('26.3', '1.21.5')
+        faithful.update(active=True, required=False)
+        faithful['bedrock']['enabled'] = True
+        reply = {'ok': True, **listing, 'installed': True, 'minecraft': '26.3', 'stored': 40 * 2**20,
+                 'events': ['[17:05:00 INFO]: [MclanPacks] <script>x</script> 1.21.5 DECLINED']}
+        def fake(argv, timeout=60):
+            self.calls.append(argv)
+            return {'packs': reply, 'status': status(), 'worlds': {'ok': False, 'output': 'n/a'}}.get(argv[0], {'ok': True, 'output': 'done'})
+        self.app.helper = fake
+        page = self.request('GET', '/world', cookie=cookie)[2].decode()
+        for marker in ('Resource packs', 'QuestCraft (VR)', 'name="java-26.3" checked', 'name="java-1.21.5" checked',
+                       'Other Java versions (15)', 'name="bedrock" value="on" checked', 'Java optional', 'Bare Bones',
+                       'Install it yourself', 'https://faithfulpack.net/license', '&lt;script&gt;x', 'form="pack-faithful-32x"'):
+            self.assertIn(marker, page)
+        self.assertNotIn('<script>x', page)
+        self.assertNotIn('name="java-1.21.4" checked', page)
+        self.app.jobs.runner = Mock(return_value={'ok': True, 'output': ''})
+        for body, argv in (('do=pack-use&id=faithful-32x&java-26.3=on&java-1.21.5=on&bedrock=on&mode=required',
+                            ['pack-use', 'faithful-32x', 'required', 'on', '26.3', '1.21.5']),
+                           ('do=pack-use&id=faithful-32x&java-1.21.5=on&java-..%2Fx=on&mode=sneaky',
+                            ['pack-use', 'faithful-32x', 'optional', 'off', '1.21.5']),
+                           ('do=pack-off', ['pack-off']), ('do=pack-clean', ['pack-clean'])):
+            self.app.jobs.runner.reset_mock()
+            location = self.request('POST', '/world', f'csrf={csrf}&{body}', cookie)[1]['Location']
+            self.assertTrue(location.startswith('/job/'), body)
+            for _ in range(50):
+                if self.app.jobs.runner.called:
+                    break
+                time.sleep(0.02)
+            self.assertEqual(self.app.jobs.runner.call_args.args[0], argv)
+        self.app.jobs.runner.reset_mock()
+        location = self.request('POST', '/world', f'csrf={csrf}&do=pack-use&id=faithful-32x', cookie)[1]['Location']
+        self.assertEqual(location, '/world')
+        self.assertFalse(self.app.jobs.runner.called)
+        reply['installed'] = False
+        self.assertIn('MclanPacks is not part of the active release', self.request('GET', '/world', cookie=cookie)[2].decode())
 
     def test_exports_are_streamed_and_names_are_restricted(self):
         cookie, _ = self.login()

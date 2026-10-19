@@ -7,6 +7,7 @@ Servidor de Minecraft para tu casa en una **Raspberry Pi 5 de 4 GB**: un solo mu
 - **Java y Bedrock en el mismo mundo**: Paper + Geyser + Floodgate, listo para NetherNet (Bedrock 26.60+). Con ViaVersion también entran clientes Java de otras versiones, por ejemplo QuestCraft en Meta Quest.
 - **Panel web**: estado en vivo, whitelist, perfiles de jugador con inventario y estadísticas, acciones (dar objetos, kits, efectos, teletransporte, mensajes…), consola, backups, auditoría y una biblioteca de hasta 50 mundos.
 - **Skins de Bedrock completas**, también las del creador de personajes, gracias al addon propio MclanSkins.
+- **Paquetes de recursos** (texturas) para Java y Bedrock, como Faithful 32x: cada jugador Java recibe la versión que corresponde a su juego, también QuestCraft. Se cambian desde el panel sin reiniciar el servidor.
 - **Mapa BlueMap** en `http://IP_DE_LA_PI:8100/`.
 - **Operación segura**: versiones fijadas por SHA-256, backups verificados archivo por archivo, actualizaciones con snapshot previo y vuelta atrás, RCON nunca publicado y panel sin privilegios.
 
@@ -22,14 +23,15 @@ Servidor de Minecraft para tu casa en una **Raspberry Pi 5 de 4 GB**: un solo mu
 6. [Mapa BlueMap](#6-mapa-bluemap)
 7. [Biblioteca de mundos](#7-biblioteca-de-mundos)
 8. [Skins de Bedrock (MclanSkins)](#8-skins-de-bedrock-mclanskins)
-9. [Administración desde la terminal](#9-administración-desde-la-terminal)
-10. [Backups y restauración](#10-backups-y-restauración)
-11. [Actualizar](#11-actualizar)
-12. [Configuración y memoria](#12-configuración-y-memoria)
-13. [Red y arranque automático](#13-red-y-arranque-automático)
-14. [Diagnóstico](#14-diagnóstico)
-15. [Arquitectura, archivos y desarrollo](#15-arquitectura-archivos-y-desarrollo)
-16. [Fuentes y licencias](#16-fuentes-y-licencias)
+9. [Paquetes de recursos (texturas)](#9-paquetes-de-recursos-texturas)
+10. [Administración desde la terminal](#10-administración-desde-la-terminal)
+11. [Backups y restauración](#11-backups-y-restauración)
+12. [Actualizar](#12-actualizar)
+13. [Configuración y memoria](#13-configuración-y-memoria)
+14. [Red y arranque automático](#14-red-y-arranque-automático)
+15. [Diagnóstico](#15-diagnóstico)
+16. [Arquitectura, archivos y desarrollo](#16-arquitectura-archivos-y-desarrollo)
+17. [Fuentes y licencias](#17-fuentes-y-licencias)
 
 ## 1. Estado del proyecto
 
@@ -41,7 +43,7 @@ El instalador sólo da por buena una instalación tras comprobar desde la propia
 - Java (Server List Ping por TCP) y Bedrock (RakNet por UDP), también a través de los puertos publicados en la IP LAN.
 - Signaling NetherNet de Geyser iniciado y su puerto TCP aceptando conexiones.
 - Mediante un diagnóstico offline de la instancia cargada:
-  - Geyser y Floodgate habilitados, igual que cada plugin de la release (BlueMap, Chunky, ViaVersion, ViaBackwards, MclanSkins) salvo los que hayas desactivado;
+  - Geyser y Floodgate habilitados, igual que cada plugin de la release (BlueMap, Chunky, ViaVersion, ViaBackwards, MclanSkins, MclanPacks) salvo los que hayas desactivado;
   - protocolo Java real de Paper igual al de la build de Geyser;
   - autenticación Floodgate con `online-mode=true`.
 
@@ -78,7 +80,7 @@ Si empiezas con una microSD vacía, la [guía desde cero](docs/INSTALACION_DESDE
 
 ### 3.1 Ajustes recomendados del sistema
 
-Raspberry Pi OS arranca con el cgroup de memoria desactivado. Sin él, Docker ignora el límite de 3 GiB del contenedor. Actívalo **antes de instalar**: si lo haces después, habrá que recrear el contenedor una vez (ver [§12](#12-configuración-y-memoria)).
+Raspberry Pi OS arranca con el cgroup de memoria desactivado. Sin él, Docker ignora el límite de 3 GiB del contenedor. Actívalo **antes de instalar**: si lo haces después, habrá que recrear el contenedor una vez (ver [§13](#13-configuración-y-memoria)).
 
 ```bash
 sudo cp /boot/firmware/cmdline.txt /boot/firmware/cmdline.txt.bak     # copia del original
@@ -236,7 +238,7 @@ Los jugadores siguen usando la misma dirección y el puerto 19132. Sobre la conf
 | --- | --- |
 | Dashboard (1) | Estado y salud, jugadores conectados, memoria y temperatura en vivo, direcciones para conectarse (clic para copiar), arrancar, parar, reiniciar, backup y versiones |
 | Players (2) | Jugadores conocidos y sus perfiles; whitelist (activar, añadir Java, Bedrock o XUID, quitar); intentos rechazados de las últimas 72 h con **Allow** y **Open 5 min and wait**; apertura temporal para un jugador (Java o Bedrock, de 1 a 15 minutos) |
-| World (3) | Biblioteca de mundos, subir mundos, BlueMap (pausar, reanudar, desactivar), borde, progreso de Chunky y ajustes de `server.properties` |
+| World (3) | Biblioteca de mundos, subir mundos, paquetes de recursos ([§9](#9-paquetes-de-recursos-texturas)), BlueMap (pausar, reanudar, desactivar), borde, progreso de Chunky y ajustes de `server.properties` |
 | Console (4) | Logs en vivo y comandos de juego con historial (↑↓), autocompletado (Tab) y atajos |
 | Backups (5) | Crear backup y ver las copias |
 | Health (6) | La auditoría de `tools/audit.sh` |
@@ -430,7 +432,63 @@ El addon propio **MclanSkins** (`addons/mclan-skins`) lo corrige:
 - **Desactivarlo:** `sudo ./manage.sh plugin mclan_skins off`, o `install.sh --disable-plugin mclan_skins` en la primera instalación. Desactivado, no se compila ni necesita el JDK, así que nunca bloquea una actualización. Al reactivarlo (`plugin mclan_skins on`), el siguiente `update` lo compila. `tools/audit.sh` avisa si el addon no puede engancharse a la build de Geyser.
 - **Límites:** el addon sólo reenvía skins razonables (hasta 512×512, 8 animaciones, 64 piezas, 16 tintes y 1 MiB de geometría). Si una skin se sale, ese jugador se ve con la skin que construye Geyser.
 
-## 9. Administración desde la terminal
+## 9. Paquetes de recursos (texturas)
+
+Un paquete de recursos cambia el aspecto del juego (texturas, sonidos, letra) sin tocar el mundo ni ejecutar código. El servidor sólo guarda los archivos y los entrega; quien los aplica es el cliente.
+
+![Panel web: Resource packs](docs/images/resource-packs.png)
+
+**Desde el panel:** World → Resource packs.
+1. Marca las versiones Java que quieras ofrecer. La del servidor (26.3) y la de QuestCraft (1.21.5) aparecen a la vista; el resto, en «Other Java versions».
+2. Deja marcada **Bedrock** para móviles, tabletas, consolas y Windows.
+3. Elige **Optional** (quien lo rechaza juega igual) o **Required** (quien lo rechaza en Java no puede jugar).
+4. Pulsa **Use this pack** o **Apply changes**. **Turn off** deja de ofrecerlo.
+
+**Qué recibe cada jugador:**
+- **Java:** al entrar, el addon propio **MclanPacks** (`addons/mclan-packs`) lee con ViaVersion qué versión usa el cliente y le envía la variante hecha para ella.
+  - Un PC con la 26.3 recibe la de 26.3; QuestCraft en 1.21.5, la de 1.21.5.
+  - Un cliente sin variante elegida juega sin paquete. Uno más nuevo que el servidor recibe la del servidor.
+  - El juego pide permiso con el aviso «Faithful 32x by the Faithful Team. License: faithfulpack.net/license».
+- **Bedrock:** Geyser lo envía al conectar. Bedrock siempre lo acepta: el paquete integrado de Geyser obliga a aceptar todos los paquetes.
+- **Cambios:** se aplican en el momento, **sin reiniciar el servidor**. Los jugadores Java conectados reciben el nuevo en unos segundos; los Bedrock, al volver a entrar.
+
+**Paquetes disponibles:**
+
+| Paquete | En el servidor | Por qué |
+| --- | --- | --- |
+| **Faithful 32x** | Sí: 17 variantes Java (1.19.2–26.3) y la edición Bedrock | Su [licencia](https://faithfulpack.net/license) permite usarlo como paquete de un servidor citando a sus autores y enlazándola. El panel y el aviso de Java lo hacen |
+| **Bare Bones** | No: el panel enlaza a su [página oficial](https://modrinth.com/resourcepack/bare-bones) | Licencia «All Rights Reserved»: su autor no permite resubirlo. Además, aún no tiene versión 26.x |
+
+**Desde la terminal:**
+
+```bash
+sudo ./manage.sh pack list                                            # catálogo y selección (JSON)
+sudo ./manage.sh pack use faithful-32x                                # versión del servidor + Bedrock, opcional
+sudo ./manage.sh pack use faithful-32x --java 26.3 --java 1.21.5      # también QuestCraft
+sudo ./manage.sh pack use faithful-32x --java 26.3 --bedrock off --required
+sudo ./manage.sh pack off                                             # dejar de ofrecerlo (los archivos se conservan)
+sudo ./manage.sh pack clean                                           # borrar descargas que ya no se usan
+```
+
+**Cómo funciona por dentro:**
+- **Descargas:** cada archivo viene de su fuente oficial (Modrinth para Java, GitHub para Bedrock) y se comprueba con los hashes que publica. Nada de esto va en el repositorio.
+- **Archivos:** se guardan en `packs/`, fuera de `data/`, así que no engordan los backups. El servidor los ve en sólo lectura.
+- **Paquetes Java:** se sirven por **HTTP en la IP LAN, puerto 8101**. Sólo existen las direcciones de los paquetes elegidos (`/<sha1>.zip`): sin listados ni otras rutas, y con límites de tiempo y de conexiones. No hace falta abrir nada en el router.
+- **Comprobación:** tras cada cambio, `manage.sh` descarga cada variante desde 8101 y compara su SHA-1. `tools/audit.sh` lo repite.
+- **Actividad:** el panel muestra lo que pasó desde el último arranque: cargas, rechazos, fallos y clientes sin variante. En la consola, `mclanpacks status`.
+
+**Qué se puede añadir al servidor y qué no:**
+
+| Tipo | ¿Sirve aquí? |
+| --- | --- |
+| Paquetes de recursos (resource packs) Java y Bedrock | Sí, con MclanPacks |
+| Plugins de Paper | Sí, como los gestionados (versión fijada y SHA-256) o como addon propio compilado en la Pi |
+| Behavior packs y addons de Bedrock | No: necesitan un servidor Bedrock, y este es Java con Geyser |
+| Mods de Fabric, Forge o NeoForge | No: Paper no carga mods, y cada jugador Java necesitaría el mismo mod |
+
+El estudio completo, con alternativas, decisiones y fuentes, está en [docs/ESTUDIO_RESOURCE_PACKS.md](docs/ESTUDIO_RESOURCE_PACKS.md).
+
+## 10. Administración desde la terminal
 
 Desde `/opt/minecraft-lan-installer`. `sudo` es intencionado: pertenecer al grupo docker equivale a ser root.
 
@@ -440,17 +498,18 @@ Desde `/opt/minecraft-lan-installer`. `sudo` es intencionado: pertenecer al grup
 | `sudo ./manage.sh status` | Estado del contenedor y de la release activa |
 | `sudo ./manage.sh logs --tail 150` · `--follow` | Logs del servidor (Ctrl+C no para el servidor) |
 | `sudo ./manage.sh verify` | Verificación completa de servicios y protocolos |
-| `sudo ./manage.sh backup` · `restore ARCHIVO` | Backup verificado y restauración ([§10](#10-backups-y-restauración)) |
-| `sudo ./manage.sh update --plan` · `update` | Ver y aplicar versiones nuevas ([§11](#11-actualizar)) |
+| `sudo ./manage.sh backup` · `restore ARCHIVO` | Backup verificado y restauración ([§11](#11-backups-y-restauración)) |
+| `sudo ./manage.sh update --plan` · `update` | Ver y aplicar versiones nuevas ([§12](#12-actualizar)) |
 | `sudo ./manage.sh rebind 192.168.1.60` | Cambiar la IP publicada si cambia el DHCP; después `sudo panel/install.sh` |
 | `sudo ./manage.sh plugin bluemap\|mclan_skins on\|off` | Activar o desactivar un plugin opcional (reinicia si estaba en marcha) |
 | `sudo ./manage.sh world …` | Biblioteca de mundos ([§7](#7-biblioteca-de-mundos)) |
+| `sudo ./manage.sh pack …` | Paquetes de recursos, sin reiniciar ([§9](#9-paquetes-de-recursos-texturas)) |
 | `sudo ./manage.sh command "list"` | Comando de consola tras confirmar `EJECUTAR` |
 | `sudo tools/audit.sh [--verify]` | Auditoría de sólo lectura |
 
 Sólo una operación que cambie el estado puede correr a la vez; `status` y `logs` siguen disponibles. Los comandos de consola tienen permisos de operador: no pongas contraseñas en ellos.
 
-## 10. Backups y restauración
+## 11. Backups y restauración
 
 ```bash
 sudo ./manage.sh backup
@@ -475,7 +534,7 @@ La copia sólo se da por consistente si los logs prueban que el mundo se guardó
 
 Guarda de vez en cuando una copia **fuera de la microSD**: si la tarjeta falla, se pierden también los backups que haya en ella. No hay backups programados ni purga automática: los `pre-switch` y `pre-update` se acumulan y conviene borrar los antiguos a mano. Más detalle en [RECUPERACION.md](docs/RECUPERACION.md).
 
-## 11. Actualizar
+## 12. Actualizar
 
 ### Versiones de Minecraft y plugins
 
@@ -510,7 +569,7 @@ Tras un `git pull` con código Docker o Compose nuevo, `start` y `restart` se ni
 
 `manage.sh` no actualiza Raspberry Pi OS ni Docker Engine.
 
-## 12. Configuración y memoria
+## 13. Configuración y memoria
 
 | Parámetro | Inicial | Motivo |
 | --- | --- | --- |
@@ -539,15 +598,15 @@ sudo ./manage.sh start
 
 **Archivos gestionados.** `compose.yaml` es copia de `docker/compose.template.yaml` y el validador rechaza divergencias. `.env` se genera a partir del estado: para cambiar la IP usa `rebind`.
 
-## 13. Red y arranque automático
+## 14. Red y arranque automático
 
-- **Puertos:** se publican sólo en la IPv4 LAN elegida: TCP 25565 (Java), UDP 19132 y TCP 19132 (Bedrock y signaling NetherNet), UDP 19133 (WebRTC) y TCP 8100 (mapa). El panel escucha en TCP 8443 de esa misma IP.
+- **Puertos:** se publican sólo en la IPv4 LAN elegida: TCP 25565 (Java), UDP 19132 y TCP 19132 (Bedrock y signaling NetherNet), UDP 19133 (WebRTC), TCP 8100 (mapa) y TCP 8101 (paquetes de recursos Java). El panel escucha en TCP 8443 de esa misma IP.
 - **RCON:** 25575 no se publica nunca fuera del contenedor.
 - **Router y firewall:** no se toca el router (ni port forwarding ni UPnP) ni las reglas del firewall del host. Docker sí gestiona sus propias reglas para publicar puertos, y eso puede interactuar con UFW o firewalld. Publicar en una IP local no es una ACL: equipos de otras subredes que ya lleguen a esa IP podrían acceder.
 - **Si cambia la IP por DHCP:** `sudo ./manage.sh rebind NUEVA_IP` y después `sudo panel/install.sh`, que renueva el certificado.
 - **Al arrancar la Pi:** Docker y el panel arrancan con systemd, y el contenedor usa `restart: unless-stopped`. Una parada manual se respeta incluso tras reiniciar; vuelve con `manage.sh start`.
 
-## 14. Diagnóstico
+## 15. Diagnóstico
 
 | Síntoma | Qué hacer |
 | --- | --- |
@@ -559,11 +618,11 @@ sudo ./manage.sh start
 | Panel sin iconos ni buscador de objetos | Repite `sudo panel/install.sh` con el servidor en marcha y BlueMap activo |
 | El panel no carga | `sudo systemctl status mclan-panel` y `sudo journalctl -u mclan-panel -n 50`; usa `https://` y el puerto 8443 |
 | `install` o `update` falla al compilar MclanSkins | La build nueva de Geyser cambió algo interno. En la primera instalación repite con `--disable-plugin mclan_skins`; si ya está instalado, `sudo ./manage.sh plugin mclan_skins off` y repite `update` |
-| `start` pide ejecutar `update` | Hiciste `git pull` con código Docker o Compose nuevo ([§11](#11-actualizar)) |
+| `start` pide ejecutar `update` | Hiciste `git pull` con código Docker o Compose nuevo ([§12](#12-actualizar)) |
 | Mapa negro | Usa Live map desde el panel; tras importar un Bedrock, `bluemap purge MAPA` |
-| Límite de memoria no efectivo | Activa el cgroup ([§3.1](#31-ajustes-recomendados-del-sistema)) y recrea el contenedor ([§12](#12-configuración-y-memoria)) |
+| Límite de memoria no efectivo | Activa el cgroup ([§3.1](#31-ajustes-recomendados-del-sistema)) y recrea el contenedor ([§13](#13-configuración-y-memoria)) |
 | Varias IP candidatas al instalar | `ip -4 addr` y `--lan-ip` |
-| Puerto ocupado | `sudo ss -ltnup`: algo usa 25565, 19132, 19133, 8100 u 8443 |
+| Puerto ocupado | `sudo ss -ltnup`: algo usa 25565, 19132, 19133, 8100, 8101 u 8443 |
 | ARM64 rechazado | `uname -m` y `dpkg --print-architecture`: hace falta el sistema de 64 bits |
 | Fallo HTTP, DNS o TLS | Fecha y hora (`timedatectl`), DNS y proxy; no desactives TLS |
 | Falta un build estable compatible | Espera a que Paper o Geyser lo publiquen; el proyecto no fuerza versiones |
@@ -581,7 +640,7 @@ free -m; df -h; vcgencmd measure_temp; vcgencmd get_throttled
 
 Los logs de operaciones rotan en `logs/`. Docker guarda tres archivos de unos 10 MB, y Paper escribe además en `data/logs/`, que no se purga.
 
-## 15. Arquitectura, archivos y desarrollo
+## 16. Arquitectura, archivos y desarrollo
 
 Un único contenedor ejecuta **Paper** con todos los plugins en la misma JVM. El panel es un servicio aparte del host.
 
@@ -592,6 +651,7 @@ Un único contenedor ejecuta **Paper** con todos los plugins en la misma JVM. El
 | Bedrock 26.60+ (NetherNet) | Signaling TCP 19132 y WebRTC UDP 19133 → Geyser → Paper |
 | Panel web | Navegador → `mclan-panel` (TCP 8443) → sudo → `panel/helper.py` → `manage.sh` / RCON interno |
 | Mundos | `data/` del host → `/data` del contenedor; mundos guardados en `worlds/` |
+| Paquetes de recursos | Java: cliente → IP LAN, TCP 8101 → MclanPacks. Bedrock: dentro de la conexión de Geyser. Archivos en `packs/` → `/opt/packs` en sólo lectura |
 | Binarios fijados | `releases/<id>/` → `/opt/release` en sólo lectura |
 
 ```text
@@ -600,6 +660,7 @@ minecraft-lan-installer/
   scripts/mclan/                 Host, versiones, runtime, backups, mundos, addons, CLI
   docker/                        Dockerfile (Temurin JRE ARM64), plantilla Compose, entrypoint, sondas, BlueMap
   addons/mclan-skins/            Plugin propio de skins (se compila en la Pi)
+  addons/mclan-packs/            Plugin propio de paquetes de recursos (se compila en la Pi)
   panel/                         Servidor web, vistas, helper privilegiado, catálogo de acciones, instalador
   tools/                         audit.sh (auditoría) y relight.py (luz de mundos convertidos)
   docs/                          Estado, guía desde cero, recuperación, validación e imágenes
@@ -607,7 +668,7 @@ minecraft-lan-installer/
   MANIFEST.sha256                SHA-256 de cada archivo del repositorio
 ```
 
-Al instalar se crean `compose.yaml`, `.env`, `config/settings.json`, `state/`, `releases/`, `data/`, `backups/`, `logs/`, `worlds/`, `imports/` y `exports/`. Ninguno va a Git. No muevas la carpeta con el servidor en marcha.
+Al instalar se crean `compose.yaml`, `.env`, `config/settings.json`, `state/`, `releases/`, `data/`, `backups/`, `logs/`, `worlds/`, `imports/`, `exports/` y `packs/`. Ninguno va a Git. No muevas la carpeta con el servidor en marcha.
 
 **Selección de versiones:**
 1. La versión de Java la marca la [página oficial de compatibilidad de Geyser](https://geysermc.org/wiki/geyser/supported-versions/).
@@ -630,12 +691,13 @@ No instalan Docker ni APT. Usan temporales, fixtures y dobles de Docker; las son
 
 Si cambias un archivo, regenera el manifiesto con `git ls-files | grep -v '^MANIFEST.sha256$' | xargs sha256sum > MANIFEST.sha256`.
 
-## 16. Fuentes y licencias
+## 17. Fuentes y licencias
 
 - [Docker en Debian](https://docs.docker.com/engine/install/debian/), [Compose](https://docs.docker.com/compose/install/linux/) y [Docker y firewalls](https://docs.docker.com/engine/network/packet-filtering-firewalls/).
 - [API de descargas de Paper](https://docs.papermc.io/misc/downloads-service/) y [requisitos de Java](https://docs.papermc.io/misc/java-install/).
 - [Geyser](https://geysermc.org/wiki/geyser/setup/), [compatibilidad](https://geysermc.org/wiki/geyser/supported-versions/), [NetherNet](https://geysermc.org/blog/preparing-for-nethernet), [Floodgate](https://geysermc.org/wiki/floodgate/) y [código fuente](https://github.com/GeyserMC/Geyser).
 - [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion), [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards), [BlueMap](https://bluemap.bluecolored.de/), [Chunky](https://hangar.papermc.io/pop4959/Chunky) y [Chunker](https://github.com/HiveGamesOSS/Chunker).
+- [Geyser: paquetes de recursos](https://geysermc.org/wiki/geyser/packs/), [Faithful](https://faithfulpack.net/) ([licencia](https://faithfulpack.net/license), [Java en Modrinth](https://modrinth.com/resourcepack/faithful-32x), [Bedrock en GitHub](https://github.com/Faithful-Resource-Pack/Faithful-32x-Bedrock)) y [Bare Bones](https://modrinth.com/resourcepack/bare-bones).
 - [Raspberry Pi Imager](https://www.raspberrypi.com/software/) y [EULA de Minecraft](https://www.minecraft.net/eula).
 
 Este repositorio no redistribuye JARs, texturas, mundos, claves ni imágenes Docker: todo se descarga de sus proveedores en tu Pi, y cada componente conserva su licencia. Minecraft es una marca de Mojang/Microsoft; este proyecto no está afiliado a ellas.

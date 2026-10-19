@@ -564,8 +564,11 @@ class App:
         if error:
             return error
         lib = self.helper(['worlds'])
+        packs = self.helper(['packs'])
         body = ((self.views.library(lib, session) if lib.get('ok') and isinstance(lib.get('worlds'), list) else
                  f'<div class="alert bad">World library unavailable: {html.escape(str(lib.get("output", "")))}</div>')
+                + (self.views.packs(packs, session, status) if packs.get('ok') and isinstance(packs.get('packs'), list) else
+                   f'<div class="alert bad">Resource packs unavailable: {html.escape(str(packs.get("output", "")))}</div>')
                 + self.views.world(status, session, self.map_link(status.get('spawn'))))
         return self.render('World', body, session, '/world', slug='world')
 
@@ -589,6 +592,20 @@ class App:
             return self.run_job(session, f'Export world ({form["format"]})', ['world-export', wid, form['format']], '/world')
         if action == 'world-import':
             return self.run_job(session, 'Import world', ['world-import', form.get('file', ''), form.get('name', '')], '/world')
+        if action == 'pack-use':
+            # Casillas java-VERSIÓN en el orden del catálogo; el helper valida paquete y versiones.
+            java = [key[5:] for key, checked in form.items()
+                    if key.startswith('java-') and checked == 'on' and re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,2}', key[5:])]
+            mode = 'required' if form.get('mode') == 'required' else 'optional'
+            bedrock = 'on' if form.get('bedrock') == 'on' else 'off'
+            if not java and bedrock == 'off':
+                self.flash(session, 'warn', 'Choose at least one Java version or Bedrock, or turn the pack off.')
+                return 303, {'Location': '/world'}, b''
+            return self.run_job(session, 'Apply resource pack', ['pack-use', form.get('id', ''), mode, bedrock, *java], '/world')
+        if action == 'pack-off':
+            return self.run_job(session, 'Turn off resource pack', ['pack-off'], '/world')
+        if action == 'pack-clean':
+            return self.run_job(session, 'Remove unused pack downloads', ['pack-clean'], '/world')
         if action == 'settings':
             status = self.helper(['status'])
             if not status.get('ok'):

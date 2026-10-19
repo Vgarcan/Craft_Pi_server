@@ -364,6 +364,7 @@ public final class MclanPacks extends JavaPlugin implements Listener {
             // El nombre es su SHA-1: el contenido de una URL nunca cambia.
             exchange.getResponseHeaders().set("Cache-Control", "public, max-age=31536000, immutable");
             if ("HEAD".equals(method)) {
+                exchange.getResponseHeaders().set("Content-Length", Long.toString(size));
                 exchange.sendResponseHeaders(200, -1);
                 return;
             }

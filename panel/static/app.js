@@ -163,7 +163,8 @@
   }
   async function submitAsync(form) {
     const body = new URLSearchParams(new FormData(form));
-    const buttons = $$('button', form);
+    // form.elements incluye los botones de fuera asociados con form="id".
+    const buttons = [...form.elements].filter((element) => element.tagName === 'BUTTON');
     buttons.forEach((b) => { b.disabled = true; });
     try {
       const response = await fetch(form.action, { method: 'POST', credentials: 'same-origin', body,

@@ -462,3 +462,39 @@ Tres revisiones independientes, de sólo lectura (documentación frente a códig
   - quitar encantamientos a algo que no tiene.
 - **Editor:** sólo ofrece lo válido. Muestra los incompatibles desactivados con su motivo y los niveles hasta el máximo de cada encantamiento; si el objeto no se puede encantar o no se apila, lo dice.
 - **Pruebas:** 151, entre ellas espada con Sharpness frente a Smite, Efficiency en espada, encantar tierra, dos espadas en una casilla, perlas por encima de 16 y reparar tierra.
+
+## 0.10.0: paquetes de recursos para Java y Bedrock (19-10-2026)
+
+- **Petición del operador:** ofrecer y gestionar mejoras visuales para Java y Bedrock de forma sencilla, compatible, segura y sostenible, empezando por Faithful. Decisiones: Java opcional; poder elegir versiones que se apliquen al elegirlas, pensando en VR (QuestCraft); Bare Bones sólo como enlace a su página oficial; puerto 8101. Estudio y alternativas en [ESTUDIO_RESOURCE_PACKS.md](ESTUDIO_RESOURCE_PACKS.md).
+- **Hallazgo que cambió el diseño:** el paquete Faithful 26.3 sólo declara `min_format`/`max_format` y no lleva `pack_format`, que un cliente 1.21.5 como QuestCraft exige. Con el único paquete de `server.properties`, QuestCraft o el PC se quedaba sin uno legible. Por eso se descartó la vía nativa.
+- **Implementado:**
+  - **Catálogo cerrado** (`scripts/mclan/packs.py`): Faithful 32x con 17 variantes Java (1.19.2–26.3) y la edición Bedrock, con URL oficial, tamaño y hashes publicados. Bare Bones, como enlace.
+  - **Addon MclanPacks 1.0.0** (`addons/mclan-packs`), compilado en la Pi como MclanSkins:
+    - HTTP de sólo lectura en el puerto 8101, publicado sólo en la IP LAN;
+    - una variante por versión de cliente, según ViaVersion;
+    - Bedrock por la API de Geyser;
+    - modo opcional u obligatorio;
+    - `mclanpacks reload` y `mclanpacks status`, y registro de cargas y rechazos en el log.
+  - **Archivos** en `packs/`, de root, fuera de `data/` y de los backups, montados de sólo lectura en `/opt/packs`.
+  - **CLI** `manage.sh pack list|use|off|clean`. Tras cada cambio comprueba desde el host cada variante servida y su SHA-1.
+  - **Panel:** World → Resource packs, con versiones, Bedrock, modo, aplicar, desactivar, actividad, autoría y licencia, y limpieza de descargas. Verbos cerrados del helper (`packs`, `pack-use`, `pack-off`, `pack-clean`).
+  - **Instalación y auditoría:** plantilla Compose con el puerto y el montaje (la anterior queda como gestionada para `update`), preflight de 8101, `verify` y `tools/audit.sh` con la sección «Paquetes de recursos».
+- **Pruebas:**
+  - Automatizadas: catálogo, descargas manipuladas, selección, comprobación HTTP, CLI, helper y panel.
+  - Vista previa en Chromium con datos inventados a 1280 y 390 px, sin desbordes.
+  - Compilación del addon contra los JAR exactos de la release, sin avisos.
+- **Verificado en hardware (19-10-2026, 17:20):**
+  - `update` añade MclanPacks y el puerto 8101 con backup previo y verificación. Además pasa de Paper 205 a 206, publicado ese día.
+  - `pack use faithful-32x --java 26.3 --java 1.21.5`: tres descargas verificadas, aplicadas sin reiniciar y comprobadas desde 8101 por SHA-1, en unos 7 s.
+  - HTTP:
+    - `application/zip` y tamaño exacto;
+    - 404 en otras rutas, en los intentos de salir de la carpeta y en el `.mcpack`;
+    - 405 con POST;
+    - un cliente mudo se corta a los 32 s.
+  - Cambios en caliente, selección corrupta (sin paquete y error en la CLI), Bare Bones rechazado con su enlace, y auditoría sin fallos.
+- **Pendiente con clientes reales:**
+  - Java 26.3: aviso con el crédito, aceptar y ver las texturas; rechazar en los modos opcional y obligatorio.
+  - QuestCraft 1.21.5: que reciba y cargue su variante.
+  - Bedrock: que reciba Faithful al conectar.
+  - Rendimiento: tiempo de descarga en wifi y memoria con varios jugadores.
+- **Fases siguientes:** un paquete por mundo (aplicado al activarlo en la biblioteca) y subida de paquetes propios con validación.

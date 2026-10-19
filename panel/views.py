@@ -54,6 +54,8 @@ STAT_LABELS = (
     ('open_chest', 'Chests opened', 'count'), ('traded_with_villager', 'Villager trades', 'count'),
     ('animals_bred', 'Animals bred', 'count'), ('fish_caught', 'Fish caught', 'count'), ('sleep_in_bed', 'Nights slept', 'count'),
 )
+# Variantes de paquete con un cliente conocido además de la del servidor.
+CLIENT_HINTS = {'1.21.5': 'QuestCraft (VR)'}
 GAMEMODE_LABELS = {'survival': 'Survival', 'creative': 'Creative', 'adventure': 'Adventure', 'spectator': 'Spectator'}
 CONSOLE_SHORTCUTS = ('list', 'time set day', 'weather clear', 'tps', 'say Hello from the panel!', 'worldborder get')
 
@@ -851,6 +853,87 @@ class Views:
             + '</div>'
             + self.card('Exports', self.table(('File', 'Size', 'Created'), exports, 'No exports yet'),
                         icon=self.texture('chest_minecart', '', 'icon')))
+
+    def packs(self, data, session, status):
+        """Paquete de recursos: variantes Java por versión del cliente, Bedrock y modo opcional/obligatorio."""
+        icon = self.texture('item_painting', '', 'icon')
+        if not data.get('installed'):
+            return self.card('Resource packs', '<p class="muted">MclanPacks is not part of the active release. '
+                             'Run <code>sudo ./manage.sh update</code> on the Pi to add it.</p>', 'wide', icon=icon)
+        cards = ''
+        for p in data['packs']:
+            links = (f'<a href="{e(p["homepage"])}" target="_blank" rel="noopener">Official page</a>'
+                     + (f' · <a href="{e(p["license"])}" target="_blank" rel="noopener">License</a>'
+                        if p['license'].startswith('https://') else ''))
+            if p['link_only']:
+                cards += (f'<article class="pack-card"><h3>{e(p["name"])} {self.pill("warn", "Install it yourself")}</h3>'
+                          f'<p>{e(p["summary"])} <span class="muted">By {e(p["credit"])}.</span></p>'
+                          f'<p class="muted">{e(p["license"])} Each player adds it in their own game; the server cannot '
+                          f'host it.</p><p><a class="mc-btn small" href="{e(p["homepage"])}" target="_blank" '
+                          'rel="noopener">Official page</a></p></article>')
+                continue
+            state = ''
+            if p['active']:
+                state = (self.pill('ok', 'Active') + ' ' + self.pill('warn' if p['required'] else '', 'Java required' if p['required'] else 'Java optional')
+                         + (' ' + self.pill('ok', 'Bedrock on') if p['bedrock'] and p['bedrock']['enabled'] else ''))
+            # A la vista la versión del servidor, los clientes conocidos (QuestCraft) y lo ya elegido.
+            main, more = '', ''
+            for v in p['java']:
+                checked = v['enabled'] if p['active'] else v['label'] == p['server_variant']
+                covers = v['versions'][0] if len(v['versions']) == 1 else f'{v["versions"][0]}–{v["versions"][-1]}'
+                hint = 'Server' if v['label'] == p['server_variant'] else CLIENT_HINTS.get(v['label'], '')
+                choice = (f'<label class="pick{" saved" if v["downloaded"] else ""}"><input type="checkbox" '
+                          f'name="java-{e(v["label"])}"{" checked" if checked else ""}><span><b>{e(covers)}</b>'
+                          + (f'<small>{e(hint)}</small>' if hint else '') + '</span></label>')
+                if hint or checked:
+                    main += choice
+                else:
+                    more += choice
+            hidden = len(p['java']) - main.count('class="pick')
+            choices = (f'<div class="picks">{main}</div>'
+                       + (f'<details><summary>Other Java versions ({hidden})</summary><div class="picks">{more}</div></details>'
+                          if more else ''))
+            bedrock = ''
+            if p['bedrock']:
+                on = p['bedrock']['enabled'] if p['active'] else True
+                bedrock = (f'<label class="pick wide"><input type="checkbox" name="bedrock" value="on"{" checked" if on else ""}>'
+                           f'<span><b>Bedrock</b><small>Phones, tablets, consoles and Windows · '
+                           f'{p["bedrock"]["size"] / 2**20:.0f} MB</small></span></label>')
+            mode = 'required' if p['active'] and p['required'] else 'optional'
+            form_id = f'pack-{p["id"]}'
+            form = (f'<form id="{e(form_id)}" method="post" action="/world" data-async>{self.csrf(session)}'
+                    f'<input type="hidden" name="do" value="pack-use"><input type="hidden" name="id" value="{e(p["id"])}">'
+                    '<fieldset class="versions"><legend>Java versions</legend>' + choices + '</fieldset>'
+                    + bedrock
+                    + self.radios('mode', (('optional', 'Optional'), ('required', 'Required')), mode, legend='Java players')
+                    + '<p class="muted">Each Java player gets the version that matches their game, read from the client '
+                      '(QuestCraft on 1.21.5 gets 1.21.5). A client with no matching version plays without the pack. '
+                      'Required: Java players who decline it cannot play. Bedrock players always receive it.</p></form>')
+            off = (self.button('/world', {'do': 'pack-off'}, 'Turn off', session, 'danger small',
+                               'Stop offering the pack? Java players lose it now; Bedrock players when they reconnect.', job=True)
+                   if p['active'] else '')
+            cards += (f'<article class="pack-card{" active" if p["active"] else ""}"><h3>{e(p["name"])} {state}</h3>'
+                      f'<p>{e(p["summary"])} <span class="muted">By {e(p["credit"])} · {links}</span></p>'
+                      f'{form}<div class="row"><button class="mc-btn primary" form="{e(form_id)}">'
+                      + ('Apply changes' if p['active'] else 'Use this pack') + f'</button>{off}</div></article>')
+        events = ''
+        for line in data.get('events', []):
+            text = line.split('[MclanPacks] ', 1)[-1]
+            stamp = line[1:9] if line.startswith('[') else ''
+            kind = ('bad' if re.search(r'FAILED|DECLINED|DISCARDED|INVALID|Error|refused|Cannot|unavailable', text)
+                    else 'ok' if 'SUCCESSFULLY_LOADED' in text else '')
+            events += f'<li class="{kind}"><span class="mono muted">{e(stamp)}</span> {e(text)}</li>'
+        stored = data.get('stored') or 0
+        return self.card(
+            'Resource packs',
+            '<p class="muted">New textures for everyone, Java and Bedrock. Changes apply right away: the server never '
+            'restarts, and players already online get the new pack within seconds (Bedrock players when they reconnect).</p>'
+            f'<div class="packs">{cards}</div>'
+            '<details><summary>Activity since the server started</summary>'
+            + (f'<ul class="pack-events">{events}</ul>' if events else '<p class="muted">Nothing yet.</p>') + '</details>'
+            + f'<p class="row muted">Downloads stored on the Pi: {stored / 2**20:.0f} MB '
+            + self.button('/world', {'do': 'pack-clean'}, 'Remove unused downloads', session, 'small', job=True) + '</p>',
+            'wide', icon=icon)
 
     def world(self, status, session, map_link):
         bluemap = status.get('bluemap')
