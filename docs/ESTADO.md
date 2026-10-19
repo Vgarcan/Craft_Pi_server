@@ -347,7 +347,15 @@ Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa
 - **Pruebas:**
   - 136 automatizadas: validación de cada acción y de sus valores inválidos, comandos generados, escape de mensajes, mascota con el UUID como int-array, protección en la última muerte, API con CSRF y Origin, catálogo, instalador y perfil sin conexión.
   - Vista previa local en Chromium a 1280 y 390 px: pestañas, buscador, envío con aviso, contador, límite de nivel de encantamiento, pestaña recordada y sin desbordes.
-- **Pendiente de hardware:**
-  - Sintaxis real de cada comando en Paper 26.3 (fuegos artificiales, partículas, `Owner` de mascotas, `title` y `tellraw`).
-  - Extracción del catálogo y de los iconos de efectos.
-  - Prueba con un jugador conectado.
+- **Verificado en hardware (19-10-2026, 02:00):**
+  - Panel desplegado. Catálogo de 1658 objetos con su nombre en inglés y 40 iconos de efectos extraídos. Todos los efectos, kits y objetos populares tienen icono y existen.
+  - **Sintaxis en Paper 26.3:** todos los comandos se analizan bien, probados con un jugador inexistente; un objeto inexistente da «Unknown item» y el panel lo trata como fallo.
+  - **Con el jugador Bedrock conectado**, por el mismo camino que la web (`mclan-panel` → sudo → helper), todo correcto:
+    - mensaje sobre la barra y título con comillas y emoji;
+    - fuegos artificiales («Summoned new Firework Rocket» ×3);
+    - trueno (sonido y chispas);
+    - 1 diamante;
+    - visión nocturna;
+    - lobo domesticado, con `Owner` = UUID del jugador como int-array.
+  - **Rechazados por el helper:** `diamond;op` y Silk Touch III.
+- **Pendiente:** que el operador pruebe las pestañas desde su navegador.
