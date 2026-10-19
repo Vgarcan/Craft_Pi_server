@@ -14,10 +14,11 @@ from .common import Error, run
 
 ROOT = Path(__file__).resolve().parents[2]
 # Clave del lock → (carpeta en addons/, JAR en releases/<id>/ y data/plugins).
-ADDONS = {"mclan_skins": ("mclan-skins", "MclanSkins.jar")}
+ADDONS = {"mclan_skins": ("mclan-skins", "MclanSkins.jar"), "mclan_packs": ("mclan-packs", "MclanPacks.jar")}
 LIBRARY = re.compile(r"META-INF/libraries/(?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+\.jar")
 # Plugins de la release que cada addon necesita para compilar (además de paper-api).
-CLASSPATH = {"mclan_skins": ("floodgate-spigot.jar", "Geyser-Spigot.jar")}
+CLASSPATH = {"mclan_skins": ("floodgate-spigot.jar", "Geyser-Spigot.jar"),
+             "mclan_packs": ("ViaVersion.jar", "Geyser-Spigot.jar")}
 
 
 def source_files(folder):

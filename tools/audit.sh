@@ -68,7 +68,7 @@ fi
 
 section 'Puertos (sólo IP LAN)'
 listening="$(ss -Htulpn)"
-for spec in tcp:25565 udp:19132 tcp:19132 udp:19133 tcp:8100; do
+for spec in tcp:25565 udp:19132 tcp:19132 udp:19133 tcp:8100 tcp:8101; do
     proto=${spec%%:*} port=${spec##*:}
     if grep -Eq "^$proto .* $LAN_IP:$port " <<<"$listening"; then ok "$proto/$port en $LAN_IP"; else fail "$proto/$port no escucha en $LAN_IP"; fi
     if grep -Eq "^$proto .* (0\.0\.0\.0|\*|\[::\]):$port " <<<"$listening"; then fail "$proto/$port publicado en todas las interfaces"; fi
@@ -92,7 +92,7 @@ print("absent" if k not in a else "off" if k in a.get("disabled_plugins", []) el
 }
 if [[ ${started:-} ]]; then
     for pair in geyser:Geyser-Spigot floodgate:floodgate bluemap:BlueMap chunky:Chunky viaversion:ViaVersion \
-                viabackwards:ViaBackwards mclan_skins:MclanSkins; do
+                viabackwards:ViaBackwards mclan_skins:MclanSkins mclan_packs:MclanPacks; do
         key=${pair%%:*} name=${pair#*:} state="$(plugin_state "$key")"
         case $state in
             absent) ;;
@@ -122,6 +122,34 @@ elif [[ $bluemap_state == on ]]; then
     fi
 else
     warn 'La release activa no incluye BlueMap'
+fi
+
+section 'Paquetes de recursos'
+packs_state="$(plugin_state mclan_packs)"
+if [[ $packs_state == on ]]; then
+    # Lo mismo que comprueba manage.sh verify: el puerto responde y cada variante Java llega con su SHA-1.
+    packs_report="$(python3 -I - "$PROJECT_DIR" "$LAN_IP" 2>&1 <<'EOF'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1] + '/scripts')
+from mclan.packs import Packs, served
+from mclan.runtime import Runtime
+current = Packs(Runtime(Path(sys.argv[1]))).selection()
+problems = served(sys.argv[2], current)
+print('\n'.join(problems) if problems else 'none' if not current else
+      'ok ' + current['pack'] + ' Java ' + (', '.join(current['java']) or 'off') + ' Bedrock ' + ('on' if current['bedrock'] else 'off'))
+EOF
+)" || packs_report="packs/active.properties ilegible: $packs_report"
+    case $packs_report in
+        none) ok "Servidor de paquetes en http://$LAN_IP:8101/ (sin paquete elegido)" ;;
+        ok\ *) ok "Paquete servido: ${packs_report#ok }" ;;
+        *) warn "$packs_report" ;;
+    esac
+    if [[ ${started:-} ]]; then
+        expect warn 'MclanPacks leyó la selección' 'MclanPacks no pudo leer packs/active.properties' lacks 'invalid pack selection'
+    fi
+elif [[ $packs_state == absent ]]; then
+    warn 'La release activa no incluye MclanPacks (sudo ./manage.sh update)'
 fi
 
 section 'Panel web'

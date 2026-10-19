@@ -23,9 +23,11 @@ PREVIOUS_TEMPLATES = {
     'f6e743cab95f8778c5e6e6c295b7c0a1d7e167d9f9db311efd9475ff90e02d60': '0.1.0',
     '30a994d1520b335cfa6d3d0a9542a75a7be6ed20ffe4348339558bc8e0046cab': '0.2.0',
     '08fb44ebac7c3f2e1706354139e54838adf599132c120ef83db157ebd24a85bd': '0.3.0',
+    '55f87c804c43cd949ce586cafc82b288e86c2e6d533dc0fee0cef4ba516d30d7': '0.9.1',
 }
 NETHERNET_WEBRTC_PORT = 19133
 BLUEMAP_PORT = 8100
+PACKS_PORT = 8101
 # Paper con Moonrise (26.x) ya no escribe el mensaje vanilla de guardado final.
 VANILLA_SAVED = 'All dimensions are saved'
 MOONRISE_SAVED = ('Saving worlds', 'Halted I/O scheduler for world', 'All RegionFile I/O tasks to complete')
@@ -243,6 +245,8 @@ class Runtime:
             # Durante el primer arranque de una transacción, un reinicio del host
             # no debe reabrir automáticamente un mundo aún no verificado.
             write_json(self.state / 'transaction.override.yaml', {'services': {'minecraft': {'restart': 'no'}}})
+        from .packs import Packs
+        Packs(self).ensure()  # Compose lo monta en /opt/packs y no crea la carpeta
         self.compose('up', '-d', '--no-build', 'minecraft', pending=pending)
         self.verify(timeout)
 
@@ -311,12 +315,19 @@ class Runtime:
                 self.verify_bluemap(active)
             except Error as exc:
                 LOG.warning('%s El servidor de juego está verificado.', exc)
+        if plugin_active(active, 'mclan_packs'):
+            # Igual que el mapa: sin paquete los jugadores siguen pudiendo jugar.
+            from .packs import Packs, served
+            for problem in served(active['lan_ip'], Packs(self).selection()):
+                LOG.warning('%s El servidor de juego está verificado.', problem)
         LOG.info('Verificación local correcta: Java %s; Bedrock %s; signaling NetherNet activo.',
                  java['version']['name'], bedrock['version'])
         print(f"Java: {active['lan_ip']}:25565 (Minecraft {active['minecraft']})")
         print(f"Bedrock: dirección {active['lan_ip']}, puerto 19132; compatibles: {active['compatibility']['bedrock']}")
         if plugin_active(active, 'bluemap'):
             print(f"Mapa BlueMap {active['bluemap']['version']}: http://{active['lan_ip']}:{BLUEMAP_PORT}/")
+        if plugin_active(active, 'mclan_packs'):
+            print(f"Paquetes de recursos Java: http://{active['lan_ip']}:{PACKS_PORT}/ (manage.sh pack list)")
         print(f"NetherNet: signaling TCP 19132 y WebRTC UDP {NETHERNET_WEBRTC_PORT} en {active['lan_ip']} "
               '(no verificado con un cliente 26.60 hasta que exista).')
         print('Falta la prueba de entrada y juego desde otro dispositivo de tu LAN. No se ha simulado un jugador.')
@@ -379,7 +390,8 @@ def validate_diagnostic(diagnostic, active, protocol):
     if not {'geyser-spigot', 'floodgate'} <= enabled:
         raise Error('Geyser y Floodgate no aparecen ambos habilitados en Paper.')
     for key, name in (('bluemap', 'BlueMap'), ('chunky', 'Chunky'), ('viaversion', 'ViaVersion'),
-                      ('viabackwards', 'ViaBackwards'), ('mclan_skins', 'MclanSkins')):
+                      ('viabackwards', 'ViaBackwards'), ('mclan_skins', 'MclanSkins'),
+                      ('mclan_packs', 'MclanPacks')):
         if plugin_active(active, key) and name.lower() not in enabled:
             raise Error(f'{name} forma parte de la release pero no aparece habilitado en Paper.')
     info = diagnostic['versionInfo']['mcInfo']

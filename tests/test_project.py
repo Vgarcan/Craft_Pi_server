@@ -596,7 +596,7 @@ class ProtocolTests(unittest.TestCase):
 
 class DiagnosticTests(unittest.TestCase):
     OPTIONAL = {'bluemap': 'BlueMap', 'chunky': 'Chunky', 'viaversion': 'ViaVersion', 'viabackwards': 'ViaBackwards',
-                'mclan_skins': 'MclanSkins'}
+                'mclan_skins': 'MclanSkins', 'mclan_packs': 'MclanPacks'}
 
     def release(self):
         """Release mínima: el diagnóstico base sólo contiene Geyser y Floodgate."""

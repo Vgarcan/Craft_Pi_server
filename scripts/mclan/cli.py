@@ -79,6 +79,20 @@ def parser():
     remove = actions.add_parser('delete', help='Archiva en backups/worlds y borra (nunca el activo)')
     remove.add_argument('id')
     remove.add_argument('--yes', action='store_true')
+    pack = commands.add_parser('pack', help='Paquete de recursos (texturas) para Java y Bedrock; se aplica sin reiniciar')
+    pack_actions = pack.add_subparsers(dest='pack_action', required=True)
+    pack_actions.add_parser('list', help='Catálogo, variantes descargadas y selección actual (JSON)')
+    use = pack_actions.add_parser('use', help='Elegir el paquete y sus variantes')
+    use.add_argument('id')
+    use.add_argument('--java', action='append', metavar='VERSION',
+                     help='Variante Java (repetible): cada jugador recibe la de su versión. '
+                          'Por defecto, la de la versión del servidor')
+    use.add_argument('--no-java', action='store_true', help='Sólo para Bedrock')
+    use.add_argument('--bedrock', choices=['on', 'off'], default='on')
+    use.add_argument('--required', action='store_true',
+                     help='Java: quien lo rechace no puede jugar. Por defecto es opcional')
+    pack_actions.add_parser('off', help='Dejar de ofrecer paquete (los archivos se conservan)')
+    pack_actions.add_parser('clean', help='Borrar las descargas que no usa la selección actual')
     console = commands.add_parser('command', help='Enviar un comando administrativo mediante RCON interno')
     console.add_argument('text', nargs='+', help='Usa comillas, por ejemplo: "whitelist add Victor"')
     return p
@@ -122,7 +136,7 @@ def settings(root):
 def guard_paths(root):
     # Evita seguir rutas gestionadas que un usuario haya sustituido por enlaces.
     for name in ('state', 'data', 'logs', 'backups', 'releases', 'config', '.env', 'compose.yaml',
-                 'worlds', 'imports', 'exports'):
+                 'worlds', 'imports', 'exports', 'packs'):
         path = root / name
         if path.is_symlink():
             raise Error(f'No se admiten enlaces en rutas gestionadas: {name}')
@@ -270,6 +284,42 @@ def manage_world(runtime, args, client):
         print(library.delete(args.id) or 'Sin datos generados que archivar.')
 
 
+def manage_pack(runtime, args, active, client):
+    from .packs import Packs, served
+    packs = Packs(runtime)
+    action = args.pack_action
+    if action == 'list':
+        print(json.dumps(packs.describe(active['minecraft']), indent=2, ensure_ascii=False))
+        return
+    if action == 'clean':
+        print(f'Liberados {packs.clean() / 1024**2:.1f} MB.')
+        return
+    if 'mclan_packs' not in active:
+        raise Error('La release activa no incluye MclanPacks: ejecuta antes sudo ./manage.sh update.')
+    if action == 'use':
+        if args.no_java and args.java:
+            raise Error('Usa --java o --no-java, no ambos.')
+        packs.use(args.id, [] if args.no_java else args.java, args.bedrock == 'on', args.required,
+                  client, active['minecraft'])
+    else:
+        packs.off()
+    if not runtime.running():
+        print('El servidor está parado: el paquete se aplicará al arrancar.')
+        return
+    reply = runtime.exec_probe('rcon', 'mclanpacks', 'reload').stdout.strip()
+    print(reply)
+    if not reply.startswith('Reloaded.') or 'Error:' in reply:
+        raise Error('MclanPacks no confirmó la nueva selección; revisa manage.sh logs.')
+    problems = served(active['lan_ip'], packs.selection())
+    if problems:
+        raise Error(' '.join(problems))
+    current = packs.selection()
+    if current and current['java']:
+        print(f"Comprobado: cada variante Java se descarga de http://{active['lan_ip']}:8101/ con su SHA-1.")
+    if current and current['bedrock']:
+        print('Bedrock: los jugadores lo reciben al volver a conectar.')
+
+
 def manage(runtime, args):
     command = args.command
     if os.environ.get('DOCKER_HOST') or os.environ.get('DOCKER_CONTEXT'):
@@ -358,6 +408,10 @@ def manage(runtime, args):
             runtime.start(args.timeout)
     elif command == 'world':
         manage_world(runtime, args, client)
+    elif command == 'pack':
+        if (runtime.state / 'operation.json').exists() and args.pack_action != 'list':
+            raise Error('Resuelve primero la operación interrumpida.')
+        manage_pack(runtime, args, active, client)
     elif command == 'command':
         text = ' '.join(args.text).strip().lstrip('/')
         if not text or '\n' in text or '\r' in text or len(text) > 2000:
@@ -389,7 +443,8 @@ def main(argv=None):
             raise Error('--timeout debe estar entre 10 y 7200 segundos.')
         readonly = (not writable or (args.mode == 'manage' and (args.command in ('logs', 'status')
                      or (args.command == 'update' and args.plan)
-                     or (args.command == 'world' and args.world_action == 'list'))))
+                     or (args.command == 'world' and args.world_action == 'list')
+                     or (args.command == 'pack' and args.pack_action == 'list'))))
         if readonly:
             (install if args.mode == 'install' else manage)(runtime, args)
         else:

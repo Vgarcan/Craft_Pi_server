@@ -20,6 +20,8 @@ services:
       GEYSER_ADVERTISE_ADDRESSES: "${LAN_IP:?Falta LAN_IP}:19133"
       # Plugins gestionados desactivados por el operador (manage.sh plugin bluemap off).
       MCLAN_DISABLED_PLUGINS: "${DISABLED_PLUGINS:-}"
+      # Dirección con la que MclanPacks ofrece los paquetes de recursos Java a los clientes.
+      MCLAN_PACKS_URL: "http://${LAN_IP:?Falta LAN_IP}:8101/"
     ports:
       - "${LAN_IP:?Falta LAN_IP}:25565:25565/tcp"
       - "${LAN_IP:?Falta LAN_IP}:19132:19132/udp"
@@ -28,6 +30,8 @@ services:
       - "${LAN_IP:?Falta LAN_IP}:19133:19133/udp"
       # Web de BlueMap (mapa y jugadores en vivo), sólo en la LAN.
       - "${LAN_IP:?Falta LAN_IP}:8100:8100/tcp"
+      # Descarga de paquetes de recursos Java (MclanPacks), sólo en la LAN.
+      - "${LAN_IP:?Falta LAN_IP}:8101:8101/tcp"
     volumes:
       - type: bind
         source: ./data
@@ -37,6 +41,13 @@ services:
       - type: bind
         source: ./releases/${RELEASE_ID:?Falta RELEASE_ID}
         target: /opt/release
+        read_only: true
+        bind:
+          create_host_path: false
+      # Paquetes de recursos que elige manage.sh pack: de root y de sólo lectura para el servidor.
+      - type: bind
+        source: ./packs
+        target: /opt/packs
         read_only: true
         bind:
           create_host_path: false

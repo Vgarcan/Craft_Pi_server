@@ -1,0 +1,14 @@
+name: MclanPacks
+version: 1.0.0
+description: Serves the server's resource pack on the LAN and gives each player the variant made for their client version.
+main: dev.mclan.packs.MclanPacks
+api-version: '1.13'
+softdepend: [ViaVersion, Geyser-Spigot]
+commands:
+  mclanpacks:
+    description: Resource pack status, or reload the selection written by manage.sh pack.
+    usage: /mclanpacks <status|reload>
+    permission: mclanpacks.admin
+permissions:
+  mclanpacks.admin:
+    default: op

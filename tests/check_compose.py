@@ -18,6 +18,7 @@ def check(binary=None):
     with tempfile.TemporaryDirectory(prefix='mclan-compose-') as directory:
         root = Path(directory)
         (root / 'data').mkdir()
+        (root / 'packs').mkdir()
         (root / 'releases' / ('a'*20)).mkdir(parents=True)
         (root / '.env').write_text('LAN_IP=192.168.1.50\nRELEASE_ID=' + 'a'*20 + '\nRUNTIME_IMAGE=mclan-runtime:test\n')
         shutil.copyfile(ROOT / 'docker/compose.template.yaml', root / 'compose.yaml')
@@ -38,16 +39,18 @@ def check(binary=None):
         ports = {(p['target'], p['protocol'], str(p['published']), p['host_ip']) for p in service['ports']}
         assert ports == {(25565, 'tcp', '25565', '192.168.1.50'), (19132, 'udp', '19132', '192.168.1.50'),
                          (19132, 'tcp', '19132', '192.168.1.50'), (19133, 'udp', '19133', '192.168.1.50'),
-                         (8100, 'tcp', '8100', '192.168.1.50')}
+                         (8100, 'tcp', '8100', '192.168.1.50'), (8101, 'tcp', '8101', '192.168.1.50')}
         # NetherNet anuncia la IP LAN del host, nunca la del bridge de Docker.
         assert service['environment']['GEYSER_TRANSPORT'] == 'both'
         assert service['environment']['GEYSER_WEBRTC_PORT'] == '19133'
         assert service['environment']['GEYSER_ADVERTISE_ADDRESSES'] == '192.168.1.50:19133'
         assert service['environment']['MCLAN_DISABLED_PLUGINS'] == ''
+        assert service['environment']['MCLAN_PACKS_URL'] == 'http://192.168.1.50:8101/'
         assert 25575 not in {p['target'] for p in service['ports']}
         volumes = {v['target']: v for v in service['volumes']}
-        assert set(volumes) == {'/data', '/opt/release'}
+        assert set(volumes) == {'/data', '/opt/release', '/opt/packs'}
         assert volumes['/opt/release']['read_only'] is True
+        assert volumes['/opt/packs']['read_only'] is True
         assert service['healthcheck']['test'] == ['CMD', 'python3', '/opt/mclan/probe.py', 'health']
         override = root / 'transaction.override.yaml'
         override.write_text(json.dumps({'services': {'minecraft': {'restart': 'no'}}}))

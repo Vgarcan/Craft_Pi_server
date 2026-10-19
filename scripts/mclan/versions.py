@@ -25,7 +25,8 @@ JARS = {"paper": "paper.jar", "geyser": "Geyser-Spigot.jar", "floodgate": "flood
         "viabackwards": "ViaBackwards.jar", **{key: jar for key, (_, jar) in addons.ADDONS.items()}}
 # Nombres para mostrar de los plugins opcionales (resúmenes de update).
 EXTRA_PLUGINS = (("bluemap", "BlueMap"), ("chunky", "Chunky"), ("viaversion", "ViaVersion"),
-                 ("viabackwards", "ViaBackwards"), ("mclan_skins", "MclanSkins"))
+                 ("viabackwards", "ViaBackwards"), ("mclan_skins", "MclanSkins"),
+                 ("mclan_packs", "MclanPacks"))
 
 
 def managed_jars(lock):

@@ -12,7 +12,9 @@ from .common import Error, sha256
 ALLOWED = {"fill.papermc.io", "fill-data.papermc.io", "download.geysermc.org",
            "geysermc.org", "download.docker.com", "hangar.papermc.io", "hangarcdn.papermc.io",
            # Chunker (conversor Bedrock ↔ Java): release de GitHub fijada por SHA-256.
-           "github.com", "release-assets.githubusercontent.com"}
+           "github.com", "release-assets.githubusercontent.com",
+           # Paquetes de recursos del catálogo (packs.py), fijados por sus hashes publicados.
+           "cdn.modrinth.com"}
 
 
 def valid_url(url):
