@@ -511,7 +511,17 @@ Desde la 0.4.0 la interfaz está **en inglés** y tiene un estilo inspirado en M
 - Inventario en cuadrícula del juego (armadura, mano secundaria, barra rápida) y cofre de ender, con los iconos reales.
 - Estadísticas (distancias, muertes, bajas, daño…) y clasificaciones de bloques minados, mobs abatidos, causas de muerte, objetos fabricados, usados y recogidos.
 - Logros completados (sin recetas).
-- **Políticas:** operador, whitelist, ban y unban, modo de juego, kick, llevar al spawn, curar y alimentar. Sólo sobre jugadores conocidos, con nombres validados, y registradas en `logs/operations.log`.
+- **Acciones**, en una tarjeta con pestañas al estilo del inventario creativo. Las pestañas funcionan sin JavaScript (radios y CSS). Con JavaScript, cada acción avisa con un toast y la página no se mueve.
+  - **Items:** buscador por nombre en inglés o id, con icono real y cantidad de 1 a 64. Atajos de cantidad y objetos populares. Seis kits (Starter, Miner, Builder, Explorer, Farmer, Warrior), niveles de experiencia (+1 a +30, −1 a −10, reset) y vaciar inventario.
+  - **Effects:** 14 efectos (visión nocturna, velocidad, prisa, salto, respiración acuática, resistencia al fuego, invisibilidad, regeneración, fuerza, resistencia, caída lenta, gracia del delfín, brillo, suerte), de 1, 5 o 15 minutos y nivel I o II. Curar, alimentar y quitar efectos.
+  - **Teleport:** spawn, cama o ancla de reaparición, última muerte (con 30 s de resistencia V, resistencia al fuego y caída lenta; nunca al vacío), ir a otro jugador, traerlo, o coordenadas. Si se deja Y vacío, va a la superficie (sólo en el Overworld).
+  - **Fun:** fuegos artificiales, «Thunderclap» (sólo sonido y chispas: un rayo real quemaría bloques), mascota ya domesticada (lobo, gato o loro) y encantar el objeto de la mano con 40 encantamientos, hasta su nivel máximo.
+  - **Message:** chat (`[Server]` en dorado), título grande o texto sobre la barra. Hasta 100 caracteres imprimibles en una línea.
+  - **Admin:** operador, whitelist, ban y unban, modo de juego y kick.
+  - **Sin conexión** sólo funciona Admin; el resto se desactiva y lo explica.
+  - Sólo sobre jugadores conocidos, con nombres y valores validados por el helper (`panel/catalog.py` tiene las listas cerradas). Todo queda en `logs/operations.log`.
+- **API JSON** que usa la propia interfaz: `POST /api/players/<uuid>/action` con `{"do": acción, ...campos}`, la sesión, el token CSRF en `X-CSRF-Token` y el mismo `Origin`. Responde `{"ok", "message", "output"}` o `{"ok": false, "error"}`. Acciones y campos: `catalog.FIELDS`. Ejemplo: `{"do": "give", "item": "diamond_sword", "count": 1}`. `GET /api/items` devuelve el catálogo `[id, nombre, icono]`.
+- **Catálogo de objetos:** `panel/install.sh` lo extrae del cliente de Minecraft junto con las texturas (`assets/minecraft/items/` y `lang/en_us.json`) y `install_assets.py` lo valida. Sin catálogo, el panel acepta cualquier id con formato válido y Minecraft rechaza los que no existen.
 
 El helper lee los `.dat` NBT con un lector propio de sólo lectura (`panel/nbt.py`) con límites de tamaño, profundidad y elementos, y sin seguir enlaces en `data/`.
 
@@ -551,7 +561,7 @@ sudo ./manage.sh world delete skyblock             # archiva en backups/worlds y
 **Diseño y seguridad:**
 
 - El servidor web corre como el usuario de sistema `mclan-panel`, sin privilegios, y no habla con Docker. Toda operación pasa por `panel/helper.py`, que es lo único que `mclan-panel` puede ejecutar con sudo (`/etc/sudoers.d/mclan-panel`).
-- El helper sólo acepta verbos fijos y nombres que cumplen patrones cerrados; **nunca** envía texto libre a la consola. Los ajustes editables son una lista cerrada: autenticación, puertos y RCON no se tocan desde la web.
+- El helper sólo acepta verbos fijos y nombres que cumplen patrones cerrados; **nunca** envía texto libre a la consola. La única excepción son los mensajes a un jugador: texto imprimible de hasta 100 caracteres, sin saltos de línea ni códigos de color, que viaja dentro de un componente de texto escapado con `json.dumps` (`tellraw`/`title`), nunca como parte del comando. Los ajustes editables son una lista cerrada: autenticación, puertos y RCON no se tocan desde la web.
 - Las operaciones usan `manage.sh` o su mismo bloqueo, y quedan en `logs/operations.log` como `Operación: panel …`. Sigue habiendo un único responsable del proceso de Paper.
 - `install.sh` comprueba que el helper y todo el código que importa pertenecen a root y no admiten escritura de grupo u otros. Si alguien cambia esos permisos, la regla sudo deja de ser segura.
 - CSP sin código ni estilos en línea: `script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'`. Los anchos de las barras van por clases, no con `style=`.

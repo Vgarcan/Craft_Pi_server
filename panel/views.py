@@ -9,6 +9,8 @@ import random
 import re
 import time
 
+import catalog
+
 SPLASHES = (
     'Now with NetherNet!', 'Raspberry Pi powered!', 'LAN only!', 'Java + Bedrock!', 'Pre-generated!',
     'Verified backups!', 'One world, two editions!', 'Also try BlueMap!', 'Pixel perfect!',
@@ -84,8 +86,9 @@ def moment(millis):
 
 
 class Views:
-    def __init__(self, assets=frozenset(), version=''):
+    def __init__(self, assets=frozenset(), version='', items=None):
         self.assets = set(assets)
+        self.items = dict(items or {})  # catálogo {id: nombre en inglés} para «Give item»
         # Huella de app.css + app.js: cada despliegue cambia la URL y el navegador no usa la versión vieja.
         self.version = version
 
@@ -96,13 +99,28 @@ class Views:
             return ''
         return f'<img class="{cls}" src="/assets/{e(name)}.png" alt="{e(alt)}" width="16" height="16" loading="lazy">'
 
+    def item_asset(self, identifier):
+        """Textura que representa un objeto o mob (objeto, bloque o huevo de generación), o ''.
+        Los objetos sin textura plana usan una cercana: brújula y reloj su primer fotograma, escaleras,
+        losas, muros y vallas su bloque base, camas y estandartes la lana de su color."""
+        identifier = str(identifier)
+        names = [f'item_{identifier}', f'block_{identifier}', f'block_{identifier}_side', f'block_{identifier}_front',
+                 f'block_{identifier}_top', f'item_{identifier}_spawn_egg', f'item_{identifier}_00']
+        base = re.sub(r'_(stairs|slab|wall|fence_gate|fence|button|pressure_plate)$', '', identifier)
+        if base != identifier:
+            names += [f'block_{base}', f'block_{base}s', f'block_{base}_planks', f'block_{base.removesuffix("_brick")}_bricks']
+        if match := re.fullmatch(r'([a-z_]+)_(bed|banner|carpet)', identifier):
+            names.append(f'block_{match[1]}_wool')
+        return next((name for name in names if f'{name}.png' in self.assets), '')
+
     def item_icon(self, identifier, cls='item-icon'):
         """Icono de un objeto o mob: textura de objeto, de bloque, o huevo de generación."""
-        for name in (f'item_{identifier}', f'block_{identifier}', f'block_{identifier}_side', f'block_{identifier}_front',
-                     f'block_{identifier}_top', f'item_{identifier}_spawn_egg'):
-            if f'{name}.png' in self.assets:
-                return f'<img class="{cls}" src="/assets/{e(name)}.png" alt="" width="16" height="16" loading="lazy">'
+        if name := self.item_asset(identifier):
+            return f'<img class="{cls}" src="/assets/{e(name)}.png" alt="" width="16" height="16" loading="lazy">'
         return f'<span class="{cls} missing">{e(str(identifier)[:2].upper())}</span>'
+
+    def item_name(self, identifier):
+        return self.items.get(identifier) or pretty(identifier)
 
     def slot(self, item=None, empty_label=''):
         if not item:
@@ -303,7 +321,7 @@ class Views:
                          '<p class="muted">Open a player to see their profile, inventory, statistics and server policies.</p>',
                          icon=self.texture('totem_of_undying', '', 'icon'))
 
-    def profile(self, p, session, map_base, spawn):
+    def profile(self, p, session, map_base, spawn, others=()):
         name, vitals, location, stats = p['name'], p['vitals'], p['location'], p['stats']
         uuid = p['uuid']
         badges = ''.join(t for t in (
@@ -337,7 +355,7 @@ class Views:
                                 f'{e(saturation)}</p>'
                                 f'<p class="big xp-level">Level {e(vitals.get("xp_level") or 0)}</p>{self.bar(xp * 100, "xp", "experience")}'
                                 f'<p class="muted">Total XP {e(vitals.get("xp_total") or 0)} · abilities: {e(abilities)}</p>',
-                                icon=self.texture('golden_apple', '', 'icon'))
+                                'r-vitals', icon=self.texture('golden_apple', '', 'icon'))
         def where(entry):
             if not entry or not entry.get('pos'):
                 return '—'
@@ -351,7 +369,7 @@ class Views:
             ('Current', where({'dimension': location.get('dimension'), 'pos': location.get('pos')})),
             ('Respawn point', where(location.get('respawn')) if location.get('respawn') else
              f'World spawn <span class="mono">{e(", ".join(str(v) for v in spawn or []))}</span>'),
-            ('Last death', where(location.get('death')))], ''), icon=self.texture('compass_00', '', 'icon'))
+            ('Last death', where(location.get('death')))], ''), 'r-location', icon=self.texture('compass_00', '', 'icon'))
         inventory = {item['slot']: item for item in p['inventory'] if isinstance(item.get('slot'), int)}
         main = ''.join(self.slot(inventory.get(i)) for i in range(9, 36))
         hotbar = ''.join(self.slot(inventory.get(i)) for i in range(9))
@@ -368,7 +386,7 @@ class Views:
                                    + '<details><summary>Ender chest</summary><div class="inv-grid">'
                                    + ''.join(self.slot(ender.get(i)) for i in range(27)) + '</div></details>'
                                    + ('<p class="muted">Inventory comes from the last autosave while the player is online.</p>'
-                                      if p['online'] else ''), 'wide', icon=self.texture('chest_minecart', '', 'icon'))
+                                      if p['online'] else ''), 'wide r-inventory', icon=self.texture('chest_minecart', '', 'icon'))
         headline = ''.join(f'<div class="stat"><span class="stat-value">{e(amount(stats["custom"].get(key), unit))}</span>'
                            f'<span class="stat-label">{e(label)}</span></div>'
                            for key, label, unit in STAT_LABELS if key in stats['custom'])
@@ -386,32 +404,198 @@ class Views:
         advancements_card = self.card(f'Advancements ({len(p["advancements"])})',
                                       f'<ul class="advancements">{advancements or "<li class=muted>None yet</li>"}</ul>',
                                       icon=self.texture('nether_star', '', 'icon'))
-        action = f'/players/{uuid}'
-        modes = ''.join(f'<option value="{m}"{" selected" if m == vitals.get("gamemode") else ""}>{label}</option>'
-                        for m, label in GAMEMODE_LABELS.items())
-        online_only = '' if p['online'] else ' disabled'
-        policy = (
-            '<div class="row">'
-            + (self.button(action, {'do': 'deop'}, 'Remove operator', session, 'danger', f'Remove operator rights from {name}?')
-               if p['op'] else self.button(action, {'do': 'op'}, 'Make operator', session, '',
-                                           f'Give {name} operator rights? They will be able to run any command.'))
-            + (self.button('/players', {'do': 'remove', 'name': name}, 'Remove from whitelist', session, 'danger',
-                           f'Remove {name} from the whitelist?') if p['whitelisted'] else '')
-            + (self.button(action, {'do': 'pardon'}, 'Unban', session, 'primary') if p['banned'] else
-               self.button(action, {'do': 'ban'}, 'Ban', session, 'danger', f'Ban {name}? They will be kicked and blocked.'))
-            + '</div>'
-            f'<form class="row gamemode" method="post" action="{e(action)}">{self.csrf(session)}<input type="hidden" name="do" value="gamemode">'
-            f'<label for="gm">Game mode</label><select id="gm" name="mode">{modes}</select>'
-            f'<button class="mc-btn"{online_only}>Apply</button></form>'
-            '<div class="row">'
-            + self.button(action, {'do': 'kick'}, 'Kick', session, 'danger', f'Kick {name} from the server?')
-            + self.button(action, {'do': 'spawn'}, 'Teleport to spawn', session, '', f'Teleport {name} to the world spawn?')
-            + self.button(action, {'do': 'heal'}, 'Heal & feed', session, 'primary')
-            + '</div><p class="muted">Kick, teleport, heal and game mode need the player online. Every action is logged on the Pi.</p>')
-        policy_card = self.card('Server policies', policy, icon=self.texture('command_block_front', '', 'icon'))
-        return (header + '<div class="grid two">' + vitals_card + location_card + '</div>' + inventory_card + stats_card
-                + '<div class="grid two">' + advancements_card + policy_card + '</div>'
+        actions_card = self.player_actions(p, session, others, spawn, inventory)
+        return (header + actions_card + '<div class="grid two">' + vitals_card + location_card + '</div>' + inventory_card
+                + stats_card + advancements_card
                 + '<p><a class="mc-btn" href="/players" data-nav>Back to players</a></p>')
+
+    # --- Acciones de jugador ------------------------------------------------------------------
+    def act(self, p, session, do, label, kind='', confirm='', fields=None, icon='', offline_ok=False, hint=''):
+        """Botón de una acción de jugador: formulario normal (sin JS) que app.js envía a la API JSON."""
+        hidden = ''.join(f'<input type="hidden" name="{e(k)}" value="{e(v)}">' for k, v in (fields or {}).items())
+        ask = f' data-confirm="{e(confirm)}"' if confirm else ''
+        disabled = '' if p['online'] or offline_ok else ' disabled'
+        tip = f' title="{e(hint)}"' if hint else ''
+        return (f'<form class="inline" method="post" action="/players/{e(p["uuid"])}" '
+                f'data-player-action="/api/players/{e(p["uuid"])}/action"{ask}>{self.csrf(session)}'
+                f'<input type="hidden" name="do" value="{e(do)}">{hidden}'
+                f'<button class="mc-btn {e(kind)}"{disabled}{tip}>{icon}<span>{e(label)}</span></button></form>')
+
+    def action_form(self, p, session, do, body, cls='', offline_ok=False):
+        """Formulario con campos: sin conexión se desactiva entero (fieldset disabled)."""
+        disabled = '' if p['online'] or offline_ok else ' disabled'
+        return (f'<form class="pa-form {e(cls)}" method="post" action="/players/{e(p["uuid"])}" '
+                f'data-player-action="/api/players/{e(p["uuid"])}/action">{self.csrf(session)}'
+                f'<input type="hidden" name="do" value="{e(do)}"><fieldset class="plain"{disabled}>{body}</fieldset></form>')
+
+    @staticmethod
+    def radios(name, options, checked, cls='segmented', legend=''):
+        items = ''.join(f'<label><input type="radio" name="{e(name)}" value="{e(value)}"'
+                        f'{" checked" if value == checked else ""}><span>{label}</span></label>'
+                        for value, label in options)
+        return f'<fieldset class="{e(cls)}"><legend>{e(legend)}</legend>{items}</fieldset>'
+
+    def player_actions(self, p, session, others, spawn, inventory):
+        name, online = p['name'], p['online']
+        def section(title, body, note=''):
+            return (f'<div class="pa-section"><h3>{e(title)}</h3>{body}'
+                    + (f'<p class="muted small">{note}</p>' if note else '') + '</div>')
+        roman = {1: 'I', 2: 'II', 3: 'III', 4: 'IV', 5: 'V'}
+
+        # Objetos
+        popular = ('diamond', 'iron_ingot', 'golden_apple', 'ender_pearl', 'cooked_beef', 'torch', 'oak_log', 'elytra',
+                   'totem_of_undying', 'firework_rocket', 'experience_bottle', 'name_tag', 'saddle', 'cake')
+        picks = ''.join(f'<button type="button" class="item-pick" data-item="{e(i)}" title="{e(self.item_name(i))}">'
+                        f'{self.item_icon(i)}<span class="sr-only">{e(self.item_name(i))}</span></button>' for i in popular)
+        counts = ''.join(f'<button type="button" class="mc-btn small" data-count="{n}">{n}</button>' for n in (1, 16, 32, 64))
+        give = self.action_form(p, session, 'give', (
+            '<div class="give-row"><label class="grow">Item<input type="text" name="item" required autocomplete="off" maxlength="64" '
+            'spellcheck="false" placeholder="Search: diamond, elytra, cake…" data-item-search></label>'
+            f'<label class="amount">Amount<input type="number" name="count" min="1" max="{catalog.GIVE_LIMIT}" value="1" '
+            'inputmode="numeric"></label><button class="mc-btn primary">Give</button></div>'
+            f'<div class="js-only quick-row"><span class="muted small">Amount</span>{counts}</div>'
+            '<div class="item-results js-only" data-item-results aria-live="polite"></div>'
+            f'<div class="js-only quick-row picks"><span class="muted small">Popular</span>{picks}</div>'), 'give-form')
+        kits = ''.join(
+            f'<div class="kit">{self.item_icon(icon, "kit-icon")}<div class="kit-text"><h4>{e(label)}</h4>'
+            f'<p class="muted small">{e(text)}</p><div class="kit-items">'
+            + ''.join(f'<span class="kit-item" title="{e(self.item_name(i))} × {c}">{self.item_icon(i)}'
+                      + (f'<b>{c}</b>' if c > 1 else '') + '</span>' for i, c in contents)
+            + f'</div></div>{self.act(p, session, "kit", "Give kit", "primary small", fields={"kit": key})}</div>'
+            for key, (label, text, icon, contents) in catalog.KITS.items())
+        xp = ''.join(self.act(p, session, 'xp', label, 'small' + (' danger' if value == 'reset' else ''),
+                              f'Reset {name} to level 0?' if value == 'reset' else '', {'amount': value})
+                     for value, label in catalog.XP_STEPS.items())
+        items_panel = (section('Give an item', give, 'Search by English name or id. Without JavaScript, type the exact id, '
+                               'for example <code>diamond_sword</code>. Up to 64 at a time.')
+                       + section('Kits', f'<div class="kits">{kits}</div>')
+                       + section('Experience levels', f'<div class="row">{xp}</div>')
+                       + section('Inventory', self.act(p, session, 'clear', 'Clear inventory', 'danger',
+                                                       f'Delete EVERYTHING in {name}\'s inventory? This cannot be undone.')))
+
+        # Efectos
+        effects = ''.join(f'<label class="effect-choice"><input type="radio" name="effect" value="{e(k)}"'
+                          f'{" checked" if i == 0 else ""}>{self.texture(f"effect_{k}", "", "effect-icon")}'
+                          f'<span>{e(v)}</span></label>' for i, (k, v) in enumerate(catalog.EFFECTS.items()))
+        effect_form = self.action_form(p, session, 'effect', (
+            f'<fieldset class="effect-grid"><legend>Effect</legend>{effects}</fieldset><div class="row">'
+            + self.radios('duration', catalog.DURATIONS.items(), '300', legend='Duration')
+            + self.radios('level', catalog.EFFECT_LEVELS.items(), '1', legend='Level')
+            + '<button class="mc-btn primary">Apply effect</button></div>'))
+        effects_panel = (section('Give an effect', effect_form)
+                         + section('Health', '<div class="row">'
+                                   + self.act(p, session, 'heal', 'Heal', 'primary', icon=self.texture('heart', '', 'icon'))
+                                   + self.act(p, session, 'feed', 'Feed', '', icon=self.texture('food', '', 'icon'))
+                                   + self.act(p, session, 'effects-clear', 'Remove all effects', 'danger',
+                                              f'Remove every effect from {name}?')
+                                   + '</div>'))
+
+        # Teletransporte
+        location = p['location']
+        def spot(entry):
+            if not entry or not entry.get('pos'):
+                return 'not set'
+            x, y, z = (round(v) for v in entry['pos'][:3])
+            return f'{catalog.DIMENSIONS.get(entry.get("dimension") or "overworld", "?")} {x}, {y}, {z}'
+        quick = ('<div class="tp-grid">'
+                 + f'<div class="tp-spot">{self.item_icon("compass")}<div><b>World spawn</b><span class="muted mono small">'
+                   f'{e(", ".join(str(v) for v in spawn or []) or "—")}</span></div>'
+                   f'{self.act(p, session, "spawn", "Go", "small", f"Teleport {name} to the world spawn?")}</div>'
+                 + f'<div class="tp-spot">{self.item_icon("red_bed")}<div><b>Bed / respawn point</b><span class="muted mono small">'
+                   f'{e(spot(location.get("respawn")))}</span></div>'
+                   f'{self.act(p, session, "tp-respawn", "Go", "small", f"Teleport {name} to their bed or respawn anchor?")}</div>'
+                 + f'<div class="tp-spot">{self.item_icon("bone")}<div><b>Last death</b><span class="muted mono small">'
+                   f'{e(spot(location.get("death")))}</span></div>'
+                   + self.act(p, session, 'tp-death', 'Go', 'small',
+                              f'Teleport {name} to where they last died? They get 30 seconds of protection '
+                              '(no damage, no fire, slow falling) to pick up their things.') + '</div></div>')
+        options = ''.join(f'<option value="{e(o)}">{e(o)}</option>' for o in others)
+        if others:
+            people = ('<div class="row">'
+                      + self.action_form(p, session, 'tp-to', f'<label>Go to<select name="target">{options}</select></label>'
+                                         '<button class="mc-btn">Teleport</button>', 'row')
+                      + self.action_form(p, session, 'bring', f'<label>Bring<select name="target">{options}</select></label>'
+                                         f'<button class="mc-btn">Bring to {e(name)}</button>', 'row')
+                      + '</div>')
+        else:
+            people = '<p class="muted">No other players are online right now.</p>'
+        dimensions = ''.join(f'<option value="{e(k)}">{e(v)}</option>' for k, v in catalog.DIMENSIONS.items())
+        low, high = catalog.HEIGHT
+        coords = self.action_form(p, session, 'tp-coords', (
+            f'<div class="row coords"><label>World<select name="dimension">{dimensions}</select></label>'
+            '<label>X<input type="text" name="x" required inputmode="numeric" pattern="-?[0-9]{1,8}" size="7"></label>'
+            f'<label>Y<input type="text" name="y" inputmode="numeric" pattern="-?[0-9]{{1,3}}" size="5" placeholder="surface" '
+            f'title="{low} to {high}, or empty for the surface"></label>'
+            '<label>Z<input type="text" name="z" required inputmode="numeric" pattern="-?[0-9]{1,8}" size="7"></label>'
+            '<button class="mc-btn primary">Teleport</button></div>'))
+        teleport_panel = (section('Places', quick)
+                          + section('Players', people)
+                          + section('Coordinates', coords, 'Leave Y empty to land on the surface (Overworld only).'))
+
+        # Diversión
+        held = inventory.get(p.get('selected_slot')) if isinstance(p.get('selected_slot'), int) else None
+        holding = (f'{self.item_icon(held["id"])} <b>{e(self.item_name(held["id"]))}</b>' if held else 'nothing')
+        enchants = ''.join(f'<option value="{e(k)}" data-max="{m}">{e(label)} (max {roman[m]})</option>'
+                           for k, (label, m) in catalog.ENCHANTMENTS.items())
+        levels = ''.join(f'<option value="{n}">{roman[n]}</option>' for n in range(1, 6))
+        enchant = self.action_form(p, session, 'enchant', (
+            f'<div class="row"><label>Enchantment<select name="enchantment" data-enchant>{enchants}</select></label>'
+            f'<label>Level<select name="level" data-enchant-level>{levels}</select></label>'
+            '<button class="mc-btn primary">Enchant held item</button></div>'))
+        pets = ''.join(self.act(p, session, 'pet', label, '', fields={'pet': key}, icon=self.item_icon(f'{key}_spawn_egg'))
+                       for key, label in catalog.PETS.items())
+        fun_panel = (section('Celebrate', '<div class="row">'
+                             + self.act(p, session, 'fireworks', 'Fireworks', 'primary', icon=self.item_icon('firework_rocket'))
+                             + self.act(p, session, 'thunder', 'Thunderclap', '',
+                                        icon=self.item_icon('lightning_rod'), hint='Sound and sparks only: no fire, no damage')
+                             + '</div>', 'The thunderclap is only sound and sparks: nothing burns and nobody gets hurt.')
+                     + section('Give a tamed pet', f'<div class="row">{pets}</div>', 'It appears next to them, already tamed.')
+                     + section('Enchant', f'<p>Holding (last save): {holding}</p>{enchant}',
+                               'Works on the item in their main hand. Minecraft refuses enchantments that do not fit it.'))
+
+        # Mensajes
+        message = self.action_form(p, session, 'message', (
+            self.radios('kind', catalog.MESSAGE_KINDS.items(), 'chat', legend='Show as')
+            + f'<div class="give-row"><label class="grow">Message<input type="text" name="text" required maxlength="{catalog.MESSAGE_LIMIT}" '
+              f'placeholder="Dinner in 5 minutes!" data-counter></label><button class="mc-btn primary">Send</button></div>'
+            f'<p class="muted small"><span data-counter-out>0</span>/{catalog.MESSAGE_LIMIT} characters</p>'))
+        message_panel = section(f'Message {name}', message,
+                                'Chat messages appear as <b>[Server]</b> in gold. Only plain text; every message is logged on the Pi.')
+
+        # Administración
+        modes = ''.join(f'<option value="{m}"{" selected" if m == p["vitals"].get("gamemode") else ""}>{label}</option>'
+                        for m, label in GAMEMODE_LABELS.items())
+        admin_panel = (
+            section('Permissions', '<div class="row">'
+                    + (self.act(p, session, 'deop', 'Remove operator', 'danger', f'Remove operator rights from {name}?',
+                                offline_ok=True) if p['op'] else
+                       self.act(p, session, 'op', 'Make operator', '', f'Give {name} operator rights? They will be able '
+                                'to run any command.', offline_ok=True))
+                    + (self.button('/players', {'do': 'remove', 'name': name}, 'Remove from whitelist', session, 'danger',
+                                   f'Remove {name} from the whitelist?') if p['whitelisted'] else '')
+                    + (self.act(p, session, 'pardon', 'Unban', 'primary', offline_ok=True) if p['banned'] else
+                       self.act(p, session, 'ban', 'Ban', 'danger', f'Ban {name}? They will be kicked and blocked.',
+                                offline_ok=True))
+                    + '</div>')
+            + section('Game mode', self.action_form(p, session, 'gamemode',
+                                                    f'<div class="row"><label>Mode<select name="mode">{modes}</select></label>'
+                                                    '<button class="mc-btn">Apply</button></div>'))
+            + section('Connection', self.act(p, session, 'kick', 'Kick', 'danger', f'Kick {name} from the server?')))
+
+        tabs = (('items', 'Items', 'diamond', items_panel), ('effects', 'Effects', 'potion', effects_panel),
+                ('teleport', 'Teleport', 'ender_pearl', teleport_panel), ('fun', 'Fun', 'firework_rocket', fun_panel),
+                ('message', 'Message', 'writable_book', message_panel), ('admin', 'Admin', 'command_block', admin_panel))
+        first = 'items' if online else 'admin'
+        radios = ''.join(f'<input type="radio" name="pa-tab" id="pa-{k}" class="pa-radio"{" checked" if k == first else ""}>'
+                         f'<label for="pa-{k}" class="pa-tab">{self.item_icon(icon, "tab-icon")}<span>{e(label)}</span></label>'
+                         for k, label, icon, _ in tabs)
+        panels = ''.join(f'<div class="pa-panel pa-{k}-panel">{body}</div>' for k, _, _, body in tabs)
+        notice = ('' if online else
+                  f'<div class="alert warn">{e(name)} is offline. Only the Admin tab works now; the rest unlocks when they join.</div>')
+        return (f'<section class="panel wide player-actions"><h2>{self.texture("command_block_front", "", "icon")}Actions</h2>'
+                f'{notice}<div class="pa-tabs" data-tabs>{radios}{panels}</div>'
+                '<p class="muted small">Every action is logged on the Pi. The panel API is '
+                f'<code>POST /api/players/{e(p["uuid"])}/action</code>.</p></section>')
 
     def players(self, status, session):
         enabled = status['properties']['white-list'] == 'true'

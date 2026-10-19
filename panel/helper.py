@@ -3,6 +3,8 @@
 
 Se ejecuta como root mediante una regla sudo limitada a este archivo. Sólo acepta los verbos de
 VERBS con argumentos validados por patrones cerrados: nunca texto libre hacia la consola de Paper.
+La única excepción es el mensaje a un jugador: texto imprimible y acotado que viaja dentro de un
+componente de texto escapado con json.dumps, nunca como parte del comando.
 Las escrituras comparten el bloqueo de manage.sh y quedan registradas en logs/operations.log.
 Imprime un objeto JSON {"ok": bool, ...} en stdout.
 """
@@ -26,6 +28,10 @@ from mclan.common import Error, LOG, run  # noqa: E402
 from mclan import nbt  # noqa: E402
 from mclan.safefs import open_folder, read_data, read_gzip_data, write_data  # noqa: E402
 from mclan.runtime import Runtime  # noqa: E402
+
+# Al final de la ruta: catalog no debe poder tapar un módulo de la biblioteca estándar.
+sys.path.append(str(ROOT / 'panel'))
+import catalog  # noqa: E402
 
 CONTAINER = 'minecraft-lan-minecraft-1'
 JAVA_NAME = re.compile(r'[A-Za-z0-9_]{3,16}')
@@ -56,6 +62,41 @@ def integer(low, high):
 def motd(value):
     if not 1 <= len(value) <= 59 or any(ord(c) < 32 or c == '\x7f' for c in value) or '§' in value:
         raise ValueError('must be 1 to 59 printable characters, without colour codes')
+    return value
+
+
+def item_id(value):
+    if not re.fullmatch(r'[a-z0-9_]{1,64}', value):
+        raise ValueError('an item id is lowercase letters, digits and _')
+    return value
+
+
+def coordinate(value):
+    if not re.fullmatch(r'-?[0-9]{1,8}', value) or abs(int(value)) > catalog.COORDINATE_LIMIT:
+        raise ValueError('coordinates must be whole numbers inside the world')
+    return str(int(value))
+
+
+def height(value):
+    if value == 'surface':
+        return value
+    low, high = catalog.HEIGHT
+    if not re.fullmatch(r'-?[0-9]{1,3}', value) or not low <= int(value) <= high:
+        raise ValueError(f'height must be between {low} and {high}, or surface')
+    return str(int(value))
+
+
+def message_text(value):
+    value = value.strip()
+    if not 1 <= len(value) <= catalog.MESSAGE_LIMIT or '§' in value \
+            or any(ord(c) < 32 or 127 <= ord(c) < 160 or c in '  ' for c in value):
+        raise ValueError(f'a message is 1 to {catalog.MESSAGE_LIMIT} printable characters on one line')
+    return value
+
+
+def player_name(value):
+    if not (JAVA_NAME.fullmatch(value) or BEDROCK_NAME.fullmatch(value)):
+        raise ValueError('invalid name')
     return value
 
 
@@ -223,7 +264,23 @@ def world_spawn(data_dir):
 
 UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 GAMEMODES = ('survival', 'creative', 'adventure', 'spectator')
-PLAYER_ACTIONS = ('op', 'deop', 'kick', 'ban', 'pardon', 'gamemode', 'spawn', 'heal')
+# Acción de jugador → validadores de sus parámetros, en orden (ver catalog.FIELDS).
+PLAYER_ACTIONS = {
+    **{action: () for action in ('op', 'deop', 'kick', 'ban', 'pardon', 'spawn', 'heal', 'feed', 'clear',
+                                 'effects-clear', 'tp-respawn', 'tp-death', 'fireworks', 'thunder')},
+    'gamemode': (choice(*GAMEMODES),),
+    'give': (item_id, integer(1, catalog.GIVE_LIMIT)),
+    'kit': (choice(*catalog.KITS),),
+    'xp': (choice(*catalog.XP_STEPS),),
+    'effect': (choice(*catalog.EFFECTS), choice(*catalog.DURATIONS), choice(*catalog.EFFECT_LEVELS)),
+    'tp-to': (player_name,), 'bring': (player_name,),
+    'tp-coords': (choice(*catalog.DIMENSIONS), coordinate, height, coordinate),
+    'enchant': (choice(*catalog.ENCHANTMENTS), integer(1, 5)),
+    'pet': (choice(*catalog.PETS),),
+    'message': (choice(*catalog.MESSAGE_KINDS), message_text),
+}
+assert set(PLAYER_ACTIONS) == set(catalog.ACTIONS)
+FIREWORK_COLORS = ((16711680, 16766720), (65280, 65535), (16711935, 16777215))
 # Estadísticas destacadas del apartado minecraft:custom.
 HEADLINE_STATS = ('play_time', 'deaths', 'mob_kills', 'player_kills', 'walk_one_cm', 'sprint_one_cm', 'swim_one_cm',
                   'fly_one_cm', 'boat_one_cm', 'jump', 'damage_dealt', 'damage_taken', 'time_since_death', 'leave_game',
@@ -440,21 +497,124 @@ class Panel:
                 'ban': {k: bans[0].get(k) for k in ('reason', 'created', 'source', 'expires')} if bans else None,
                 'op_level': ops[0].get('level') if ops else None}
 
-    def player_action(self, action, name, mode=None):
-        if name not in {p['name'] for p in self.players()['players']}:
+    def stored_location(self, uuid_text, which):
+        """Punto de reaparición o última muerte guardados en el .dat del jugador (o None)."""
+        try:
+            data = nbt.loads(read_data(self.runtime.data, f'world/players/data/{uuid_text}.dat', 4 * 1024**2))
+        except (OSError, ValueError):
+            return None
+        entry = profile_from(data, {}, {})['location'].get(which)
+        if not entry or not isinstance(entry.get('pos'), list) or len(entry['pos']) < 3:
+            return None
+        dimension = entry.get('dimension') or 'overworld'
+        if dimension not in catalog.DIMENSIONS:
+            return None
+        return dimension, [int(v) for v in entry['pos'][:3]]
+
+    def player_commands(self, action, player, params, known):
+        """Comandos (tuplas de palabras ya validadas) de una acción, o un texto de error."""
+        name = player['name']
+        def tp(dimension, x, y, z):
+            return ('execute', 'in', f'minecraft:{dimension}', 'run', 'tp', name, x, y, z)
+        if action in ('op', 'deop', 'pardon'):
+            return [(action, name)]
+        if action in ('kick', 'ban'):
+            return [(action, name, 'Kicked from the server panel' if action == 'kick' else 'Banned from the server panel')]
+        if action == 'gamemode':
+            return [('gamemode', params[0], name)]
+        if action == 'spawn':
+            return [tp('overworld', *[str(v) for v in (world_spawn(self.runtime.data) or [0, 100, 0])])]
+        if action == 'heal':
+            return [('effect', 'give', name, 'minecraft:instant_health', '1', '10')]
+        if action == 'feed':
+            return [('effect', 'give', name, 'minecraft:saturation', '1', '10')]
+        if action == 'give':
+            return [('give', name, f'minecraft:{params[0]}', params[1])]
+        if action == 'kit':
+            return [('give', name, f'minecraft:{item}', str(count)) for item, count in catalog.KITS[params[0]][3]]
+        if action == 'clear':
+            return [('clear', name)]
+        if action == 'xp':
+            if params[0] == 'reset':
+                return [('xp', 'set', name, '0', 'levels'), ('xp', 'set', name, '0', 'points')]
+            return [('xp', 'add', name, params[0], 'levels')]
+        if action == 'effect':
+            effect, seconds, level = params
+            return [('effect', 'give', name, f'minecraft:{effect}', seconds, str(int(level) - 1))]
+        if action == 'effects-clear':
+            return [('effect', 'clear', name)]
+        if action in ('tp-respawn', 'tp-death'):
+            stored = self.stored_location(player['uuid'], 'respawn' if action == 'tp-respawn' else 'death')
+            if not stored:
+                return 'They have no bed or respawn anchor set yet.' if action == 'tp-respawn' else 'No death recorded yet.'
+            dimension, (x, y, z) = stored
+            if action == 'tp-respawn':
+                return [tp(dimension, f'{x + 0.5}', f'{y + 0.6}', f'{z + 0.5}')]
+            if y < catalog.HEIGHT[0] or (dimension == 'the_end' and y < 0):
+                return 'They fell into the void: there is nothing to recover there.'
+            # Resistencia V, sin caída ni fuego durante 30 s: la muerte pudo ser por lava, caída o mobs.
+            return [('effect', 'give', name, 'minecraft:resistance', '30', '4'),
+                    ('effect', 'give', name, 'minecraft:fire_resistance', '30', '0'),
+                    ('effect', 'give', name, 'minecraft:slow_falling', '30', '0'),
+                    tp(dimension, f'{x + 0.5}', str(y), f'{z + 0.5}')]
+        if action in ('tp-to', 'bring'):
+            other = known.get(params[0])
+            if not other or not other['online']:
+                return f'{params[0]} is not online.'
+            return [('tp', name, other['name']) if action == 'tp-to' else ('tp', other['name'], name)]
+        if action == 'tp-coords':
+            dimension, x, y, z = params
+            if y == 'surface':
+                # spreadplayers deja al jugador sobre el primer bloque sólido de la superficie.
+                return [('spreadplayers', x, z, '0', '1', 'false', name)]
+            return [tp(dimension, f'{int(x) + 0.5}', y, f'{int(z) + 0.5}')]
+        if action == 'enchant':
+            return [('enchant', name, f'minecraft:{params[0]}', params[1])]
+        if action == 'fireworks':
+            commands = []
+            for offset, (color, fade) in zip(('~1 ~1 ~', '~-1 ~1 ~1', '~ ~1 ~-1'), FIREWORK_COLORS):
+                rocket = ('{LifeTime:25,FireworksItem:{id:"minecraft:firework_rocket",count:1,components:'
+                          '{"minecraft:fireworks":{flight_duration:1,explosions:[{shape:"large_ball",'
+                          f'colors:[I;{color}],fade_colors:[I;{fade}],has_trail:true,has_twinkle:true}}]}}}}}}}}')
+                commands.append(('execute', 'at', name, 'run', 'summon', 'minecraft:firework_rocket', *offset.split(), rocket))
+            return commands
+        if action == 'thunder':
+            # Sólo sonido y chispas: un rayo real quema bloques y hace daño.
+            return [('execute', 'at', name, 'run', 'playsound', 'minecraft:entity.lightning_bolt.thunder', 'weather',
+                     '@a', '~', '~', '~', '1', '1'),
+                    ('execute', 'at', name, 'run', 'particle', 'minecraft:electric_spark', '~', '~1', '~',
+                     '1', '1.5', '1', '0.6', '200')]
+        if action == 'pet':
+            value = uuid.UUID(player['uuid']).int
+            owner = ','.join(str(struct.unpack('>i', ((value >> shift) & 0xFFFFFFFF).to_bytes(4, 'big'))[0])
+                             for shift in (96, 64, 32, 0))
+            return [('execute', 'at', name, 'run', 'summon', f'minecraft:{params[0]}', '~', '~', '~',
+                     f'{{Owner:[I;{owner}],PersistenceRequired:1b}}')]
+        if action == 'message':
+            kind, text = params
+            if kind == 'chat':
+                component = [{'text': '[Server] ', 'color': 'gold'}, {'text': text, 'color': 'white'}]
+                return [('tellraw', name, json.dumps(component, ensure_ascii=False))]
+            component = {'text': text, 'color': 'gold' if kind == 'title' else 'white'}
+            return [('title', name, kind, json.dumps(component, ensure_ascii=False))]
+        raise ValueError(f'unknown action {action}')
+
+    def player_action(self, action, name, *params):
+        known = {p['name']: p for p in self.players()['players']}
+        player = known.get(name)
+        if not player:
             return {'ok': False, 'output': 'Unknown player.'}
-        commands = {
-            'op': [('op', name)], 'deop': [('deop', name)], 'pardon': [('pardon', name)],
-            'kick': [('kick', name, 'Kicked from the server panel')],
-            'ban': [('ban', name, 'Banned from the server panel')],
-            'gamemode': [('gamemode', mode, name)],
-            'spawn': [('execute', 'in', 'minecraft:overworld', 'run', 'tp', name,
-                       *[str(v) for v in (world_spawn(self.runtime.data) or [0, 100, 0])])],
-            'heal': [('effect', 'give', name, 'minecraft:instant_health', '1', '10'),
-                     ('effect', 'give', name, 'minecraft:saturation', '1', '10')],
-        }[action]
-        LOG.info('Acción de jugador desde el panel: %s %s %s', action, name, mode or '')
-        return {'ok': True, 'output': ' '.join(self.rcon(*words) for words in commands)}
+        if action not in catalog.OFFLINE_OK and not player['online']:
+            return {'ok': False, 'output': f'{name} is not online. This action needs them in the game.'}
+        commands = self.player_commands(action, player, params, known)
+        if isinstance(commands, str):
+            return {'ok': False, 'output': commands}
+        LOG.info('Acción de jugador desde el panel: %s %s %s', action, name, ' '.join(params))
+        replies = [self.rcon(*words) for words in commands]
+        # Minecraft responde con un error legible (objeto incompatible, jugador no encontrado…).
+        failed = [r for r in replies if re.search(r'^(No |Unknown |Incorrect |Expected |Can\'t |Could not |'
+                                                 r'Invalid |Nothing changed|.* cannot support)', r)]
+        return {'ok': not failed, 'output': ' '.join(failed or replies)[:600]}
 
     def status(self):
         active = self.runtime.active()
@@ -724,14 +884,20 @@ def parse(argv):
             raise ValueError('invalid UUID')
         return verb, args, False
     if verb == 'player-action':
-        if len(args) not in (2, 3):
-            raise ValueError('player-action needs an action, a name and optionally a game mode')
-        action, name = choice(*PLAYER_ACTIONS)(args[0]), args[1]
-        if not (JAVA_NAME.fullmatch(name) or BEDROCK_NAME.fullmatch(name)):
-            raise ValueError('invalid name')
-        if (action == 'gamemode') != (len(args) == 3):
-            raise ValueError('only gamemode takes a game mode')
-        return verb, [action, name, *([choice(*GAMEMODES)(args[2])] if len(args) == 3 else [])], True
+        if len(args) < 2:
+            raise ValueError('player-action needs an action and a name')
+        action, name, params = choice(*PLAYER_ACTIONS)(args[0]), player_name(args[1]), args[2:]
+        checks = PLAYER_ACTIONS[action]
+        if len(params) != len(checks):
+            raise ValueError(f'{action} takes {len(checks)} value(s)')
+        values = [check(value) for check, value in zip(checks, params)]
+        if action == 'enchant' and int(values[1]) > catalog.ENCHANTMENTS[values[0]][1]:
+            raise ValueError(f'{values[0]} goes up to level {catalog.ENCHANTMENTS[values[0]][1]}')
+        if action == 'tp-coords' and values[2] == 'surface' and values[0] != 'overworld':
+            raise ValueError('surface teleports only work in the overworld')
+        if action in ('tp-to', 'bring') and values[0] == name:
+            raise ValueError('choose another player')
+        return verb, [action, name, *values], True
     if verb == 'bluemap-render':
         expect(1)
         return verb, [choice('on', 'off')(args[0])], True

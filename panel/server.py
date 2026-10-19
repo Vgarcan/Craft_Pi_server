@@ -31,6 +31,7 @@ from urllib.parse import parse_qs, urlsplit
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from views import ACTIONS, EDITIONS, PROPERTY_FORM, Views  # noqa: E402
+import catalog  # noqa: E402
 
 HELPER = ['sudo', '-n', '/usr/bin/python3', '-I', str(HERE / 'helper.py')]
 STATIC = HERE / 'static'
@@ -118,10 +119,22 @@ class App:
             assets = {p.name for p in self.assets_dir.glob('*.png')}
         except OSError:
             assets = set()  # sin texturas: el CSS usa sus equivalentes
+        self.items = self.load_items()
         digest = hashlib.sha256()
         for name in ('app.css', 'app.js'):
             digest.update((STATIC / name).read_bytes())
-        self.views = Views(assets, digest.hexdigest()[:12])
+        self.views = Views(assets, digest.hexdigest()[:12], self.items)
+
+    def load_items(self):
+        """Catálogo {id: nombre} extraído del cliente al instalar; vacío si no existe."""
+        try:
+            items = json.loads((self.assets_dir / 'items.json').read_text(encoding='utf-8'))['items']
+        except (OSError, ValueError, KeyError, TypeError):
+            return {}
+        if not isinstance(items, dict):
+            return {}
+        return {k: v for k, v in items.items() if isinstance(k, str) and re.fullmatch(r'[a-z0-9_]{1,64}', k)
+                and isinstance(v, str) and len(v) <= 80}
 
     # --- Infraestructura -----------------------------------------------------------------
     def helper(self, argv, timeout=60):
@@ -323,6 +336,8 @@ class App:
                 return self.json({'error': 'invalid JSON'}, 400)
             if path == '/api/console' and isinstance(payload, dict) and isinstance(payload.get('command'), str):
                 return self.json(self.helper(['console', payload['command']], timeout=30))
+            if match := re.fullmatch(r'/api/players/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/action', path):
+                return self.player_api(match[1], payload)
             if (match := re.fullmatch(r'/api/job/([0-9a-f]{12})/seen', path)) and match[1] in self.jobs.items:
                 self.jobs.items[match[1]]['seen'] = True
                 return self.json({'ok': True})
@@ -333,6 +348,9 @@ class App:
             return self.json({'ok': True} if not problem else {'ok': False, 'error': problem[1]})
         if path == '/api/pulse':
             return self.json(self.helper(['pulse'], timeout=30))
+        if path == '/api/items':
+            return self.json({'items': [[key, label, self.views.item_asset(key)] for key, label in
+                                        sorted(self.items.items(), key=lambda item: item[1])]})
         if path == '/api/console':
             lines = query.get('lines', ['200'])[0]
             return self.json(self.helper(['logs', lines if lines in ('100', '200', '500') else '200'], timeout=30))
@@ -465,20 +483,52 @@ class App:
                                session, '/players', slug='profile', status=404)
         status = self.helper(['status'])
         map_base = self.config['map_url'] if (status.get('bluemap') or {}).get('enabled') else ''
-        return self.render(profile['name'], self.views.profile(profile, session, map_base, status.get('spawn')),
+        others = [p['name'] for p in self.helper(['players']).get('players', []) if p['online'] and p['uuid'] != uuid]
+        return self.render(profile['name'], self.views.profile(profile, session, map_base, status.get('spawn'), others),
                            session, '/players', slug='profile')
 
-    def profile_post(self, session, form, uuid):
-        action = form.get('do')
+    def player_request(self, uuid, fields):
+        """argv del helper para una acción de jugador (formulario o JSON), o (None, motivo).
+        El helper vuelve a validar cada valor; aquí sólo se completan valores por defecto y se
+        resuelve el objeto por su nombre en inglés."""
+        action = fields.get('do')
         known = {p['uuid']: p['name'] for p in self.helper(['players']).get('players', [])}
-        if uuid not in known or action not in ('op', 'deop', 'kick', 'ban', 'pardon', 'gamemode', 'spawn', 'heal'):
+        if uuid not in known or action not in catalog.ACTIONS:
+            return None, 'Unknown player or action.'
+        values = [str(fields.get(name, '')).strip() for name in catalog.FIELDS.get(action, ())]
+        if action == 'give':
+            wanted = values[0].lower().removeprefix('minecraft:')
+            names = {label.lower(): key for key, label in self.items.items()}
+            item = wanted.replace(' ', '_') if wanted.replace(' ', '_') in self.items else names.get(wanted, wanted)
+            if self.items and item not in self.items:
+                return None, f'Unknown item "{values[0][:40]}". Pick one from the search results.'
+            values = [item, values[1] or '1']
+        if action == 'tp-coords' and not values[2]:
+            values[2] = 'surface'
+        return ['player-action', action, known[uuid], *values], None
+
+    def profile_post(self, session, form, uuid):
+        argv, problem = self.player_request(uuid, form)
+        if problem == 'Unknown player or action.':
             return 400, {}, b''
-        argv = ['player-action', action, known[uuid]] + ([form.get('mode', '')] if action == 'gamemode' else [])
-        labels = {'op': 'Operator rights granted.', 'deop': 'Operator rights removed.', 'kick': 'Player kicked.',
-                  'ban': 'Player banned.', 'pardon': 'Player unbanned.', 'gamemode': 'Game mode changed.',
-                  'spawn': 'Teleported to spawn.', 'heal': 'Healed and fed.'}
-        self.result_flash(session, self.helper(argv, timeout=30), labels[action])
+        if problem:
+            self.flash(session, 'bad', problem)
+        else:
+            self.result_flash(session, self.helper(argv, timeout=30), catalog.LABELS[argv[1]])
         return 303, {'Location': f'/players/{uuid}'}, b''
+
+    def player_api(self, uuid, payload):
+        """POST /api/players/<uuid>/action con {"do": acción, ...campos}: lo que usa la interfaz."""
+        if not isinstance(payload, dict) or not all(isinstance(v, (str, int)) for v in payload.values()):
+            return self.json({'ok': False, 'error': 'send a JSON object of strings'}, 400)
+        argv, problem = self.player_request(uuid, {k: str(v) for k, v in payload.items()})
+        if problem:
+            return self.json({'ok': False, 'error': problem}, 404 if problem.startswith('Unknown player') else 400)
+        result = self.helper(argv, timeout=30)
+        output = (result.get('output') or '').strip()
+        if result.get('ok'):
+            return self.json({'ok': True, 'message': catalog.LABELS[argv[1]], 'output': output})
+        return self.json({'ok': False, 'error': output or 'The action failed.'})
 
     def players_post(self, session, form, query):
         action = form.get('do')

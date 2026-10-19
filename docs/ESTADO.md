@@ -335,3 +335,19 @@ Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa
 - **Java de la misma versión** (26.3, cuenta verificada) entra con ViaVersion instalado. Falta probar QuestCraft con una versión distinta.
 - **Depuración de Geyser retirada:** `debug-mode: false`, idéntico a la copia previa. Se aplica en el siguiente reinicio.
 - **Pendiente:** los cambios de skin en mitad de la partida siguen exigiendo reconectar.
+
+## Panel 0.8.0: acciones de jugador (19-10-2026)
+
+- **Petición del operador:** más acciones en el perfil (dar objetos y más) y una interfaz clara. Los mensajes escritos se permiten con límites.
+- **Implementado:**
+  - Pestañas Items, Effects, Teleport, Fun, Message y Admin, con 25 acciones validadas por el helper. Las listas cerradas están en `panel/catalog.py`.
+  - API JSON `POST /api/players/<uuid>/action` y `GET /api/items`.
+  - Catálogo de objetos e iconos de efectos extraídos del cliente.
+  - Sin conexión, sólo Admin.
+- **Pruebas:**
+  - 136 automatizadas: validación de cada acción y de sus valores inválidos, comandos generados, escape de mensajes, mascota con el UUID como int-array, protección en la última muerte, API con CSRF y Origin, catálogo, instalador y perfil sin conexión.
+  - Vista previa local en Chromium a 1280 y 390 px: pestañas, buscador, envío con aviso, contador, límite de nivel de encantamiento, pestaña recordada y sin desbordes.
+- **Pendiente de hardware:**
+  - Sintaxis real de cada comando en Paper 26.3 (fuegos artificiales, partículas, `Owner` de mascotas, `title` y `tellraw`).
+  - Extracción del catálogo y de los iconos de efectos.
+  - Prueba con un jugador conectado.

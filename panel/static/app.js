@@ -1,6 +1,7 @@
 // Craft Pi Server panel — progressive enhancement. Every page and form also works without JavaScript.
 (() => {
   'use strict';
+  document.documentElement.classList.add('js');  // muestra los controles que sólo funcionan con JS
   const csrf = () => document.body.dataset.csrf || '';
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -187,6 +188,11 @@
     const form = event.target;
     const message = form.dataset.confirm;
     if (message && !confirm(message)) { event.preventDefault(); return; }
+    if (form.dataset.playerAction) {
+      event.preventDefault();
+      playerAction(form);
+      return;
+    }
     if (form.hasAttribute('data-async') && $('[data-tray]')) {
       event.preventDefault();
       submitAsync(form);
@@ -392,6 +398,121 @@
     });
   }
 
+  // --- Acciones de jugador: API JSON, aviso y refresco parcial del perfil --------------------
+  async function refreshProfile() {
+    try {
+      const response = await fetch(location.href, { credentials: 'same-origin', headers: { 'X-Requested-With': 'fetch' } });
+      const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+      for (const selector of ['.nameplate', '.r-vitals', '.r-location', '.r-inventory', '.pa-admin-panel']) {
+        const fresh = $(selector, doc);
+        const current = $(selector);
+        if (fresh && current) current.replaceWith(fresh);
+      }
+    } catch { /* la próxima visita mostrará los datos nuevos */ }
+  }
+  async function playerAction(form) {
+    const fields = Object.fromEntries(new FormData(form));
+    delete fields.csrf;
+    const buttons = $$('button', form);
+    buttons.forEach((b) => { b.disabled = true; });
+    try {
+      const response = await fetch(form.dataset.playerAction, { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() }, body: JSON.stringify(fields) });
+      if (response.status === 401) { location.href = '/login'; return; }
+      const reply = await response.json().catch(() => ({}));
+      if (reply.ok) {
+        toast('ok', reply.message, reply.output || '');
+        if (fields.do === 'message') form.reset();
+        setTimeout(refreshProfile, 700);
+      } else {
+        toast('bad', 'Could not do that', reply.error || `HTTP ${response.status}`);
+      }
+    } catch {
+      toast('bad', 'Could not do that', 'The panel could not be reached.');
+    } finally {
+      buttons.forEach((b) => { b.disabled = false; });
+    }
+  }
+  let catalog = null;
+  async function items() {
+    if (!catalog) catalog = getJSON('/api/items').then((data) => data.items || []).catch(() => { catalog = null; return []; });
+    return catalog;
+  }
+  function initPlayer(root) {
+    const tabs = $('[data-tabs]', root);
+    if (!tabs) return;
+    const saved = store.get('pa-tab', '');
+    const radio = saved && $(`#${CSS.escape(saved)}`, tabs);
+    if (radio && !$('.alert.warn', tabs.parentElement)) radio.checked = true;
+    tabs.addEventListener('change', (event) => { if (event.target.name === 'pa-tab') store.set('pa-tab', event.target.id); });
+
+    const search = $('[data-item-search]', root);
+    const results = $('[data-item-results]', root);
+    const choose = (id) => {
+      search.value = id;
+      $$('.item-result', results).forEach((b) => b.classList.toggle('selected', b.dataset.item === id));
+    };
+    let timer = null;
+    const render = async () => {
+      const query = search.value.trim().toLowerCase();
+      if (query.length < 2) { results.replaceChildren(); return; }
+      const key = query.replace(/\s+/g, '_');
+      const found = (await items()).filter(([id, name]) => id.includes(key) || name.toLowerCase().includes(query))
+        .sort((a, b) => Number(!a[1].toLowerCase().startsWith(query)) - Number(!b[1].toLowerCase().startsWith(query))
+          || a[1].length - b[1].length)
+        .slice(0, 48);
+      results.replaceChildren(...found.map(([id, name, icon]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `item-result${id === search.value ? ' selected' : ''}`;
+        button.dataset.item = id;
+        button.title = id;
+        if (icon) {
+          const img = document.createElement('img');
+          img.className = 'item-icon';
+          img.src = `/assets/${icon}.png`;
+          img.alt = '';
+          img.loading = 'lazy';
+          button.append(img);
+        }
+        const label = document.createElement('span');
+        label.textContent = name;
+        button.append(label);
+        return button;
+      }));
+      if (!found.length) {
+        const empty = document.createElement('p');
+        empty.className = 'muted';
+        empty.textContent = 'No item matches that name.';
+        results.replaceChildren(empty);
+      }
+    };
+    if (search && results) {
+      search.addEventListener('focus', items, { once: true });
+      search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(render, 120); });
+      results.addEventListener('click', (event) => {
+        const button = event.target.closest('.item-result');
+        if (button) choose(button.dataset.item);
+      });
+      $$('.item-pick', root).forEach((b) => b.addEventListener('click', () => { search.value = b.dataset.item; render().then(() => choose(b.dataset.item)); }));
+      const count = $('input[name="count"]', search.form);
+      $$('[data-count]', root).forEach((b) => b.addEventListener('click', () => { count.value = b.dataset.count; }));
+    }
+
+    const enchant = $('[data-enchant]', root);
+    const level = $('[data-enchant-level]', root);
+    const limit = () => {
+      const max = Number(enchant.selectedOptions[0]?.dataset.max || 5);
+      $$('option', level).forEach((o) => { o.disabled = Number(o.value) > max; });
+      if (Number(level.value) > max) level.value = String(max);
+    };
+    if (enchant && level) { enchant.addEventListener('change', limit); limit(); }
+
+    const counter = $('[data-counter]', root);
+    const out = $('[data-counter-out]', root);
+    if (counter && out) counter.addEventListener('input', () => { out.textContent = String(counter.value.length); });
+  }
+
   // --- Tareas largas ----------------------------------------------------------------------
   function initJob(root) {
     const marker = $('[data-job]', root);
@@ -412,6 +533,7 @@
     initConsole(root);
     initUpload(root);
     initJob(root);
+    initPlayer(root);
     onScroll();
   }
   init(document);

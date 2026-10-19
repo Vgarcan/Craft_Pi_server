@@ -179,6 +179,31 @@ class HelperValidationTests(unittest.TestCase):
                 with self.subTest(bad=bad[0][0]), self.assertRaises(ValueError):
                     installer.install(archive(bad), target)
             self.assertEqual((target / 'logo.png').read_bytes(), png)
+            catalog = json.dumps({'items': {'diamond': 'Diamond', 'oak_log': 'Oak Log'}}).encode()
+            self.assertIn('items.json', installer.install(archive([('effect_speed.png', png, 'file'),
+                                                                   ('items.json', catalog, 'file')]), target))
+            for bad in (b'not json', json.dumps({'items': {'Bad Id': 'x'}}).encode(),
+                        json.dumps({'items': {'ok': 'line\nbreak'}}).encode(), json.dumps({'items': []}).encode()):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    installer.install(archive([('items.json', bad, 'file')]), target)
+            self.assertEqual(sorted(p.name for p in target.iterdir()), ['effect_speed.png', 'items.json'])
+
+    def test_item_catalog_comes_from_the_client_jar(self):
+        import io
+        import zipfile
+        extract = load('extract_assets')
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as jar:
+            jar.writestr('assets/minecraft/items/diamond_sword.json', '{}')
+            jar.writestr('assets/minecraft/items/oak_log.json', '{}')
+            jar.writestr('assets/minecraft/items/mystery_thing.json', '{}')
+            jar.writestr('assets/minecraft/items/../evil.json', '{}')
+            jar.writestr('assets/minecraft/lang/en_us.json', json.dumps({'item.minecraft.diamond_sword': 'Diamond Sword',
+                                                                         'block.minecraft.oak_log': 'Oak Log'}))
+        with zipfile.ZipFile(buffer) as jar:
+            items = json.loads(extract.catalog(jar, set(jar.namelist())))['items']
+        self.assertEqual(items, {'diamond_sword': 'Diamond Sword', 'mystery_thing': 'Mystery Thing', 'oak_log': 'Oak Log'})
+        self.assertTrue(load('install_assets').valid_catalog(json.dumps({'items': items}).encode()))
 
     def test_nbt_reader_roundtrip_and_limits(self):
         import gzip
@@ -232,7 +257,9 @@ class HelperValidationTests(unittest.TestCase):
 
     def test_player_actions_only_for_known_players(self):
         panel = helper.Panel.__new__(helper.Panel)
-        panel.players = Mock(return_value={'players': [{'name': 'Steve'}]})
+        panel.players = Mock(return_value={'players': [
+            {'name': 'Steve', 'uuid': '11111111-2222-3333-4444-555555555555', 'online': True},
+            {'name': '.Alex', 'uuid': '00000000-0000-0000-0009-01fbcf3158a4', 'online': False}]})
         panel.rcon = Mock(return_value='ok')
         panel.runtime = Mock(data=Path('/nonexistent'))
         self.assertFalse(panel.player_action('op', 'Mallory')['ok'])
@@ -241,6 +268,75 @@ class HelperValidationTests(unittest.TestCase):
         self.assertEqual(panel.rcon.call_args.args, ('gamemode', 'creative', 'Steve'))
         panel.player_action('ban', 'Steve')
         self.assertEqual(panel.rcon.call_args.args[:2], ('ban', 'Steve'))
+        # Sin conexión sólo funcionan las políticas; el resto se rechaza antes de tocar RCON.
+        panel.rcon.reset_mock()
+        self.assertIn('not online', panel.player_action('give', '.Alex', 'diamond', '1')['output'])
+        self.assertIn('not online', panel.player_action('tp-to', 'Steve', '.Alex')['output'])
+        panel.rcon.assert_not_called()
+        self.assertTrue(panel.player_action('op', '.Alex')['ok'])
+        panel.rcon.return_value = 'Unknown item <--[HERE]'
+        self.assertFalse(panel.player_action('give', 'Steve', 'nope', '1')['ok'])
+
+    def test_new_player_actions_are_validated(self):
+        valid = {
+            ('give', 'Steve', 'diamond_sword', '1'), ('kit', 'Steve', 'starter'), ('xp', 'Steve', '-5'),
+            ('xp', 'Steve', 'reset'), ('effect', '.Alex', 'night_vision', '300', '2'), ('tp-to', 'Steve', '.Alex'),
+            ('tp-coords', 'Steve', 'overworld', '-120', 'surface', '45'), ('tp-coords', 'Steve', 'the_nether', '8', '70', '-8'),
+            ('enchant', 'Steve', 'sharpness', '5'), ('pet', 'Steve', 'wolf'), ('message', 'Steve', 'chat', 'Hola "chicos" \\ 😀'),
+            ('heal', 'Steve'), ('feed', 'Steve'), ('fireworks', 'Steve'), ('thunder', 'Steve'), ('tp-death', 'Steve'),
+        }
+        for argv in valid:
+            with self.subTest(argv=argv):
+                self.assertEqual(helper.parse(['player-action', *argv])[0], 'player-action')
+        invalid = (
+            ('give', 'Steve', 'Diamond', '1'), ('give', 'Steve', 'diamond', '65'), ('give', 'Steve', 'diamond', '0'),
+            ('give', 'Steve', 'diamond 1 ; op @a', '1'), ('give', 'Steve', 'diamond'), ('kit', 'Steve', 'creative'),
+            ('xp', 'Steve', '1000'), ('effect', 'Steve', 'wither', '300', '1'), ('effect', 'Steve', 'speed', '86400', '1'),
+            ('effect', 'Steve', 'speed', '300', '3'), ('tp-to', 'Steve', 'Steve'), ('tp-to', 'Steve', '@a'),
+            ('tp-coords', 'Steve', 'the_nether', '1', 'surface', '1'), ('tp-coords', 'Steve', 'overworld', '1', '400', '1'),
+            ('tp-coords', 'Steve', 'overworld', '99999999', '64', '1'), ('tp-coords', 'Steve', 'overworld', '~', '64', '1'),
+            ('enchant', 'Steve', 'silk_touch', '2'), ('enchant', 'Steve', 'sharpness', '6'), ('pet', 'Steve', 'ender_dragon'),
+            ('message', 'Steve', 'chat', ''), ('message', 'Steve', 'chat', 'a' * 101), ('message', 'Steve', 'chat', 'line\nbreak'),
+            ('message', 'Steve', 'chat', '§cred'), ('message', 'Steve', 'book', 'hi'), ('heal', 'Steve', 'extra'),
+        )
+        for argv in invalid:
+            with self.subTest(argv=argv), self.assertRaises(ValueError):
+                helper.parse(['player-action', *argv])
+
+    def test_player_action_commands(self):
+        panel = helper.Panel.__new__(helper.Panel)
+        panel.runtime = Mock(data=Path('/nonexistent'))
+        steve = {'name': 'Steve', 'uuid': '00000000-0000-0000-0009-01fbcf3158a4', 'online': True}
+        known = {'Steve': steve, 'Alex': {'name': 'Alex', 'uuid': 'x', 'online': True},
+                 'Offline': {'name': 'Offline', 'uuid': 'y', 'online': False}}
+        run = lambda action, *params: panel.player_commands(action, steve, list(params), known)
+        self.assertEqual(run('give', 'diamond', '5'), [('give', 'Steve', 'minecraft:diamond', '5')])
+        self.assertEqual(len(run('kit', 'warrior')), len(helper.catalog.KITS['warrior'][3]))
+        self.assertEqual(run('xp', 'reset'), [('xp', 'set', 'Steve', '0', 'levels'), ('xp', 'set', 'Steve', '0', 'points')])
+        self.assertEqual(run('effect', 'speed', '60', '2'), [('effect', 'give', 'Steve', 'minecraft:speed', '60', '1')])
+        self.assertEqual(run('bring', 'Alex'), [('tp', 'Alex', 'Steve')])
+        self.assertEqual(run('tp-to', 'Offline'), 'Offline is not online.')
+        self.assertEqual(run('tp-coords', 'overworld', '10', 'surface', '-20'),
+                         [('spreadplayers', '10', '-20', '0', '1', 'false', 'Steve')])
+        self.assertEqual(run('tp-coords', 'the_end', '0', '70', '0')[0][:6], ('execute', 'in', 'minecraft:the_end', 'run', 'tp', 'Steve'))
+        # El texto viaja como componente JSON escapado: las comillas no pueden cerrar el comando.
+        words = run('message', 'chat', 'hi "there" \\ {x}')[0]
+        self.assertEqual(words[:2], ('tellraw', 'Steve'))
+        self.assertEqual(json.loads(words[2])[1]['text'], 'hi "there" \\ {x}')
+        self.assertEqual(run('message', 'title', 'Hola')[0][:3], ('title', 'Steve', 'title'))
+        # Mascota domesticada: el dueño es el UUID del jugador como int-array.
+        self.assertIn('Owner:[I;0,0,590331,-818849628]', run('pet', 'cat')[0][-1])
+        rocket = run('fireworks')[0][-1]
+        self.assertEqual(rocket.count('{'), rocket.count('}'))
+        # Muerte: protección antes de llevarlo; al vacío no.
+        panel.stored_location = Mock(return_value=('overworld', [5, 12, 7]))
+        commands = run('tp-death')
+        self.assertEqual([c[3] for c in commands[:3]], ['minecraft:resistance', 'minecraft:fire_resistance', 'minecraft:slow_falling'])
+        self.assertEqual(commands[-1][-3:], ('5.5', '12', '7.5'))
+        panel.stored_location = Mock(return_value=('overworld', [5, -90, 7]))
+        self.assertIn('void', run('tp-death'))
+        panel.stored_location = Mock(return_value=None)
+        self.assertIn('no bed', run('tp-respawn'))
 
     def test_world_verbs_are_validated(self):
         self.assertEqual(helper.parse(['world-create', 'My World', '-42'])[1], ['My World', '-42'])
@@ -699,9 +795,12 @@ class PanelAppTests(unittest.TestCase):
         self.assertIn(f'href="/players/{uuid}"'.encode(), body)
         code, _, page = self.request('GET', f'/players/{uuid}', cookie=cookie)
         self.assertEqual(code, 200)
-        for marker in (b'Vitals', b'Inventory', b'Statistics', b'Server policies', b'Make operator', b'2 min', b'Story'):
+        for marker in (b'Vitals', b'Inventory', b'Statistics', b'Actions', b'Make operator', b'2 min', b'Story',
+                       b'Give an item', b'Starter', b'Night vision', b'Last death', b'Thunderclap', b'Sharpness',
+                       b'Message .Alguien', b'data-player-action="/api/players/'):
             self.assertIn(marker, page)
         self.assertNotIn(b'<script>', page)
+        self.assertNotIn(b' disabled>', page.split(b'pa-admin-panel')[0].split(b'player-actions')[1])
         self.request('POST', f'/players/{uuid}', f'csrf={csrf}&do=gamemode&mode=creative', cookie)
         self.assertEqual(self.calls[-1], ['player-action', 'gamemode', '.Alguien', 'creative'])
         self.request('POST', f'/players/{uuid}', f'csrf={csrf}&do=op', cookie)
@@ -710,6 +809,51 @@ class PanelAppTests(unittest.TestCase):
         self.assertEqual(self.request('POST', f'/players/{other}', f'csrf={csrf}&do=op', cookie)[0], 400)
         self.assertEqual(self.request('POST', f'/players/{uuid}', f'csrf={csrf}&do=rm', cookie)[0], 400)
         self.assertEqual(self.request('POST', f'/players/{uuid}', 'do=op', cookie)[0], 403)
+        # Objetos por nombre o id del catálogo; un objeto desconocido no llega al helper.
+        self.app.items = {'diamond_sword': 'Diamond Sword', 'oak_log': 'Oak Log'}
+        self.request('POST', f'/players/{uuid}', f'csrf={csrf}&do=give&item=Oak+Log&count=', cookie)
+        self.assertEqual(self.calls[-1], ['player-action', 'give', '.Alguien', 'oak_log', '1'])
+        calls = len(self.calls)
+        self.request('POST', f'/players/{uuid}', f'csrf={csrf}&do=give&item=unobtainium&count=1', cookie)
+        self.assertEqual([c[0] for c in self.calls[calls:]], ['players'])
+        self.request('POST', f'/players/{uuid}', f'csrf={csrf}&do=tp-coords&dimension=overworld&x=1&y=&z=2', cookie)
+        self.assertEqual(self.calls[-1], ['player-action', 'tp-coords', '.Alguien', 'overworld', '1', 'surface', '2'])
+        # API JSON: misma traducción, token CSRF en cabecera y mismo Origin.
+        headers = {'Host': '192.168.1.50:8443', 'Cookie': cookie, 'Origin': 'https://192.168.1.50:8443'}
+        api = f'/api/players/{uuid}/action'
+        body = json.dumps({'do': 'give', 'item': 'diamond_sword', 'count': 1}).encode()
+        self.assertEqual(self.app.handle('POST', api, headers, body, '192.168.1.9')[0], 403)
+        code, _, payload = self.app.handle('POST', api, dict(headers, **{'X-CSRF-Token': csrf}), body, '192.168.1.9')
+        self.assertEqual((code, json.loads(payload)['message']), (200, 'Item given.'))
+        self.assertEqual(self.calls[-1], ['player-action', 'give', '.Alguien', 'diamond_sword', '1'])
+        for wrong, expected in ((b'[1]', 400), (json.dumps({'do': 'rm'}).encode(), 404), (json.dumps({'do': 'kit', 'kit': ['x']}).encode(), 400)):
+            with self.subTest(wrong=wrong):
+                self.assertEqual(self.app.handle('POST', api, dict(headers, **{'X-CSRF-Token': csrf}), wrong, '192.168.1.9')[0], expected)
+        self.app.helper = lambda argv, timeout=60: listing if argv[0] == 'players' else {'ok': False, 'output': 'No player was found'}
+        code, _, payload = self.app.handle('POST', api, dict(headers, **{'X-CSRF-Token': csrf}),
+                                           json.dumps({'do': 'heal'}).encode(), '192.168.1.9')
+        self.assertEqual(json.loads(payload), {'ok': False, 'error': 'No player was found'})
+        items = json.loads(self.request('GET', '/api/items', cookie=cookie)[2])['items']
+        self.assertEqual(items[0][:2], ['diamond_sword', 'Diamond Sword'])
+
+    def test_offline_profile_only_enables_admin_actions(self):
+        cookie, _ = self.login()
+        uuid = '00000000-0000-0000-0009-01f1b0392c35'
+        player = {'uuid': uuid, 'name': '.Alguien', 'edition': 'bedrock', 'online': False, 'op': False, 'banned': False,
+                  'whitelisted': True, 'last_played': None}
+        profile = dict(player, ok=True, xuid=123, ban=None, op_level=None, first_played=None,
+                       vitals={'health': 10.0, 'food': 8, 'gamemode': 'survival', 'abilities': {}},
+                       location={'dimension': 'overworld', 'pos': [1.0, 64.0, 2.0], 'death': None, 'respawn': None},
+                       inventory=[], ender_chest=[], equipment={}, stats={'custom': {}}, advancements=[])
+        self.app.helper = lambda argv, timeout=60: {'players': {'ok': True, 'players': [player]}, 'player': profile,
+                                                    'status': status()}.get(argv[0], {'ok': True})
+        page = self.request('GET', f'/players/{uuid}', cookie=cookie)[2]
+        self.assertIn(b'is offline', page)
+        self.assertIn(b'id="pa-admin" class="pa-radio" checked', page)
+        items_panel = page.split(b'pa-items-panel')[1].split(b'pa-effects-panel')[0]
+        self.assertIn(b'disabled', items_panel)
+        admin = page.split(b'pa-admin-panel')[1]
+        self.assertNotIn(b'<button class="mc-btn " disabled', admin.split(b'Game mode')[0])
 
     def test_world_library_page_and_actions(self):
         cookie, csrf = self.login()
