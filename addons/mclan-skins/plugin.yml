@@ -1,6 +1,6 @@
 name: MclanSkins
-version: 1.1.1
-description: Bedrock players see original Bedrock skins (any size); Java players see the default skin.
+version: 1.2.0
+description: Bedrock players see complete original Bedrock skins (persona, animations); Java players see the default skin.
 main: dev.mclan.skins.MclanSkins
 api-version: '1.13'
 depend: [floodgate, Geyser-Spigot]

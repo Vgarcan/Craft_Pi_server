@@ -1,41 +1,49 @@
 package dev.mclan.skins;
 
-import java.lang.reflect.Method;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Base64;
-import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.cloudburstmc.protocol.bedrock.data.skin.AnimatedTextureType;
+import org.cloudburstmc.protocol.bedrock.data.skin.AnimationData;
+import org.cloudburstmc.protocol.bedrock.data.skin.AnimationExpressionType;
+import org.cloudburstmc.protocol.bedrock.data.skin.ImageData;
+import org.cloudburstmc.protocol.bedrock.data.skin.PersonaPieceData;
+import org.cloudburstmc.protocol.bedrock.data.skin.PersonaPieceTintData;
+import org.cloudburstmc.protocol.bedrock.data.skin.SerializedSkin;
 import org.geysermc.floodgate.api.FloodgateApi;
 import org.geysermc.floodgate.api.event.skin.SkinApplyEvent;
 import org.geysermc.geyser.api.GeyserApi;
 import org.geysermc.geyser.api.connection.GeyserConnection;
 import org.geysermc.geyser.api.event.EventRegistrar;
+import org.geysermc.geyser.api.event.bedrock.SessionDisconnectEvent;
 import org.geysermc.geyser.api.event.bedrock.SessionLoginEvent;
-import org.geysermc.geyser.api.event.bedrock.SessionSkinApplyEvent;
-import org.geysermc.geyser.api.skin.Skin;
-import org.geysermc.geyser.api.skin.SkinGeometry;
 import org.geysermc.geyser.session.GeyserSession;
+import org.geysermc.geyser.session.UpstreamSession;
 import org.geysermc.geyser.session.auth.BedrockClientData;
+import org.jose4j.json.JsonUtil;
 
 /**
- * Floodgate aplica a cada jugador Bedrock la conversión Java de su skin (API de GeyserMC) y, si existe,
- * Geyser la manda también a los clientes Bedrock: la skin original y su geometría se pierden.
+ * Skins de jugadores Bedrock en un servidor Java con Geyser y Floodgate.
  *
- * <ul>
- * <li>default: se cancela esa aplicación (Java ve la skin por defecto) y Geyser recurre a la skin Bedrock
- * guardada en su caché. Geyser sólo guarda las de hasta 128×128 que no son persona; las demás se guardan
- * aquí con su propio método interno.</li>
- * <li>converted: Java ve la conversión y, mediante el evento oficial SessionSkinApplyEvent, los clientes
- * Bedrock reciben la skin original.</li>
- * </ul>
+ * <p>Geyser reconstruye cada skin con sólo imagen, geometría y brazos: descarta piezas y tintes persona
+ * (creador de personajes) y animaciones, y el cliente rechaza el resultado y muestra una skin por defecto.
+ * Este plugin guarda al iniciar sesión la skin completa que firmó el cliente y la pone en cada entrada de
+ * la lista de jugadores que Geyser envía a los clientes Bedrock, como hace el servidor oficial de Bedrock.
+ *
+ * <p>java-skin: default cancela además la conversión Java de Floodgate (API de GeyserMC): Java ve la skin
+ * por defecto. Con converted, Java ve esa conversión. Bedrock ve la original en los dos casos.
  */
 public final class MclanSkins extends JavaPlugin {
-    private static final int GEYSER_LIMIT = 128 * 128 * 4;
-    private static final int MAX_SKIN = 512 * 512 * 4;
-    private Method storeSkin;
-    private Method storeGeometry;
+    private static final int MAX_IMAGE = 512 * 512 * 4;
+    /** XUID → skin completa. Geyser pone el XUID en todas las entradas, también en la del propio jugador. */
+    private final Map<String, SerializedSkin> skins = new ConcurrentHashMap<>();
+    private Field upstreamField;
+    private Field queueField;
 
     @Override
     public void onEnable() {
@@ -45,102 +53,125 @@ public final class MclanSkins extends JavaPlugin {
             getLogger().warning("Unknown java-skin '" + mode + "'; using default.");
             mode = "default";
         }
-        EventRegistrar owner = EventRegistrar.of(this);
-        if ("converted".equals(mode)) {
-            GeyserApi.api().eventBus().subscribe(owner, SessionSkinApplyEvent.class, this::originalForBedrock);
-            getLogger().info("java-skin: converted. Java sees the converted skin; Bedrock sees the original.");
+        if ("default".equals(mode)) {
+            FloodgateApi.getInstance().getEventBus().subscribe(SkinApplyEvent.class, event -> event.setCancelled(true));
+        }
+        try {
+            upstreamField = GeyserSession.class.getDeclaredField("upstream");
+            queueField = UpstreamSession.class.getDeclaredField("postStartGamePackets");
+            upstreamField.setAccessible(true);
+            queueField.setAccessible(true);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            getLogger().warning("This Geyser build cannot be hooked (" + e + "); Bedrock players get Geyser's own skins.");
             return;
         }
-        FloodgateApi.getInstance().getEventBus().subscribe(SkinApplyEvent.class, event -> event.setCancelled(true));
-        try {
-            Class<?> provider = Class.forName("org.geysermc.geyser.skin.SkinProvider");
-            storeSkin = provider.getDeclaredMethod("storeBedrockSkin", UUID.class, String.class, byte[].class);
-            storeGeometry = provider.getDeclaredMethod("storeBedrockGeometry", UUID.class, byte[].class, byte[].class);
-            storeSkin.setAccessible(true);
-            storeGeometry.setAccessible(true);
-            GeyserApi.api().eventBus().subscribe(owner, SessionLoginEvent.class, event -> keepLargeSkin(event.connection()));
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            getLogger().warning("This Geyser build has no usable skin cache (" + e + "); Bedrock skins larger than "
-                    + "128x128 will show the default skin.");
-        }
-        getLogger().info("java-skin: default. Java sees the default skin; Bedrock sees the original Bedrock skin.");
+        EventRegistrar owner = EventRegistrar.of(this);
+        GeyserApi.api().eventBus().subscribe(owner, SessionLoginEvent.class, event -> login(event.connection()));
+        GeyserApi.api().eventBus().subscribe(owner, SessionDisconnectEvent.class,
+                event -> skins.remove(event.connection().xuid()));
+        getLogger().info("java-skin: " + mode + ". Bedrock players see complete original Bedrock skins.");
     }
 
-    /** Antes de unirse al servidor Java: Geyser aún no ha construido la lista de jugadores. */
-    private void keepLargeSkin(GeyserConnection connection) {
+    /** Antes de unirse al servidor Java: aún no se ha enviado ninguna lista de jugadores. */
+    private void login(GeyserConnection connection) {
         if (!(connection instanceof GeyserSession session)) {
             return;
         }
-        BedrockClientData data = session.getClientData();
-        describe(connection.bedrockUsername(), data);
-        byte[] skin = data.getSkinData();
-        // Geyser ya guarda las que caben en su límite; las enormes se descartan.
-        if (skin == null || skin.length > MAX_SKIN || (skin.length <= GEYSER_LIMIT && !data.isPersonaSkin())) {
-            return;
-        }
         try {
-            // UUID de Floodgate de una cuenta no vinculada: 0 y el XUID. Las vinculadas usan su skin Java.
-            UUID uuid = new UUID(0, Long.parseLong(connection.xuid()));
-            storeSkin.invoke(null, uuid, data.getSkinId(), skin);
-            storeGeometry.invoke(null, uuid, data.getGeometryName(), data.getGeometryData());
-            getLogger().info("Kept the original " + data.getSkinImageWidth() + "x" + data.getSkinImageHeight()
-                    + " Bedrock skin of " + connection.bedrockUsername() + ".");
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            getLogger().warning("Could not keep the Bedrock skin of " + connection.bedrockUsername() + ": " + e);
-        }
-    }
-
-    /** Resumen de la skin tal como la envía el cliente (sólo campos de skin, nada del dispositivo). */
-    private void describe(String player, BedrockClientData data) {
-        String summary = "Skin of " + player + ": " + data.getSkinImageWidth() + "x" + data.getSkinImageHeight()
-                + ", persona=" + data.isPersonaSkin() + ", premium=" + data.isPremiumSkin()
-                + ", arm=" + data.getArmSize() + ", patch=" + text(data.getGeometryName(), 160)
-                + ", geometry=" + (data.getGeometryData() == null ? 0 : data.getGeometryData().length) + " B";
-        try {
-            String jwt = data.getOriginalString();
-            String[] parts = jwt == null ? new String[0] : jwt.split("\\.");
-            if (parts.length == 3) {
-                // Recuento aproximado sin Gson (no está en el classpath de compilación): basta para diagnosticar.
-                String claims = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
-                summary += ", animatedImages=" + count(claims, "\"AnimationExpression\"")
-                        + ", personaPieces=" + count(claims, "\"PieceId\"")
-                        + ", pieceTints=" + count(claims, "\"Colors\"")
-                        + ", animationData=" + text(string(claims, "SkinAnimationData"), 80)
-                        + ", geometryEngine=" + text(string(claims, "SkinGeometryDataEngineVersion"), 40);
+            SerializedSkin skin = completeSkin(session.getClientData());
+            if (skin != null) {
+                skins.put(connection.xuid(), skin);
+                getLogger().info("Complete skin of " + connection.bedrockUsername() + ": " + skin.getSkinData().getWidth()
+                        + "x" + skin.getSkinData().getHeight() + ", persona=" + skin.isPersona() + ", pieces="
+                        + skin.getPersonaPieces().size() + ", animations=" + skin.getAnimations().size() + ".");
             }
-        } catch (RuntimeException e) {
-            summary += ", client data unreadable (" + e + ")";
+            UpstreamSession current = session.getUpstream();
+            if (!(current instanceof SkinUpstream)) {
+                SkinUpstream replacement = new SkinUpstream(current.getSession(), skins);
+                replacement.setInitialized(current.isInitialized());
+                queueField.set(replacement, queueField.get(current));
+                upstreamField.set(session, replacement);
+            }
+        } catch (Exception e) {
+            getLogger().warning("Could not handle the skin of " + connection.bedrockUsername() + ": " + e);
         }
-        getLogger().info(summary);
     }
 
-    private static int count(String json, String token) {
-        return json.split(Pattern.quote(token), -1).length - 1;
+    /** La skin tal como la firmó el cliente (datos del login). */
+    static SerializedSkin completeSkin(BedrockClientData data) throws Exception {
+        String jwt = data.getOriginalString();
+        String[] parts = jwt == null ? new String[0] : jwt.split("\\.");
+        if (parts.length != 3 || data.getSkinData() == null || data.getSkinData().length > MAX_IMAGE) {
+            return null;
+        }
+        Map<String, Object> claims = JsonUtil.parseJson(new String(Base64.getUrlDecoder().decode(parts[1]),
+                StandardCharsets.UTF_8));
+        List<AnimationData> animations = new ArrayList<>();
+        for (Object item : list(claims, "AnimatedImageData")) {
+            Map<?, ?> animation = (Map<?, ?>) item;
+            byte[] image = Base64.getDecoder().decode((String) animation.get("Image"));
+            if (image.length > MAX_IMAGE) {
+                return null;
+            }
+            animations.add(new AnimationData(
+                    ImageData.of(number(animation, "ImageWidth"), number(animation, "ImageHeight"), image),
+                    AnimatedTextureType.values()[number(animation, "Type")],
+                    ((Number) animation.get("Frames")).floatValue(),
+                    AnimationExpressionType.values()[number(animation, "AnimationExpression")]));
+        }
+        List<PersonaPieceData> pieces = new ArrayList<>();
+        for (Object item : list(claims, "PersonaPieces")) {
+            Map<?, ?> piece = (Map<?, ?>) item;
+            pieces.add(new PersonaPieceData(text(piece, "PieceId"), text(piece, "PieceType"), text(piece, "PackId"),
+                    Boolean.TRUE.equals(piece.get("IsDefault")), text(piece, "ProductId")));
+        }
+        List<PersonaPieceTintData> tints = new ArrayList<>();
+        for (Object item : list(claims, "PieceTintColors")) {
+            Map<?, ?> tint = (Map<?, ?>) item;
+            List<String> colors = new ArrayList<>();
+            for (Object color : (List<?>) tint.get("Colors")) {
+                colors.add(String.valueOf(color));
+            }
+            tints.add(new PersonaPieceTintData(text(tint, "PieceType"), colors));
+        }
+        byte[] cape = data.getCapeData();
+        String engine = text(claims, "SkinGeometryDataEngineVersion");
+        return SerializedSkin.builder()
+                .skinId(data.getSkinId())
+                .playFabId(text(claims, "PlayFabId"))
+                .skinResourcePatch(new String(data.getGeometryName(), StandardCharsets.UTF_8))
+                .skinData(ImageData.of(data.getSkinImageWidth(), data.getSkinImageHeight(), data.getSkinData()))
+                .animations(animations)
+                .capeData(cape == null || cape.length == 0 ? ImageData.EMPTY
+                        : ImageData.of(data.getCapeImageWidth(), data.getCapeImageHeight(), cape))
+                .geometryData(new String(data.getGeometryData(), StandardCharsets.UTF_8))
+                .geometryDataEngineVersion(engine.isEmpty() ? ""
+                        : new String(Base64.getDecoder().decode(engine), StandardCharsets.UTF_8))
+                .animationData(text(claims, "SkinAnimationData"))
+                .capeId(data.getCapeId() == null ? "" : data.getCapeId())
+                .fullSkinId(data.getSkinId() + (data.getCapeId() == null ? "" : data.getCapeId()))
+                .armSize(data.getArmSize() == null ? "wide" : data.getArmSize())
+                .skinColor(data.getSkinColor() == null ? "#0" : data.getSkinColor())
+                .personaPieces(pieces)
+                .tintColors(tints)
+                .premium(data.isPremiumSkin())
+                .persona(data.isPersonaSkin())
+                .capeOnClassic(data.isCapeOnClassicSkin())
+                .overridingPlayerAppearance(true)
+                .trusted(true)
+                .build();
     }
 
-    private static byte[] string(String json, String key) {
-        Matcher match = Pattern.compile("\"" + key + "\"\\s*:\\s*\"([^\"]*)\"").matcher(json);
-        return match.find() ? match.group(1).getBytes(StandardCharsets.UTF_8) : null;
+    private static List<?> list(Map<?, ?> map, String key) {
+        return map.get(key) instanceof List<?> value ? value : List.of();
     }
 
-    private static String text(byte[] bytes, int limit) {
-        if (bytes == null || bytes.length == 0) {
-            return "-";
-        }
-        String value = new String(bytes, StandardCharsets.UTF_8).replaceAll("\\s+", "");
-        return value.length() > limit ? value.substring(0, limit) + "…" : value;
+    private static int number(Map<?, ?> map, String key) {
+        return ((Number) map.get(key)).intValue();
     }
 
-    private void originalForBedrock(SessionSkinApplyEvent event) {
-        if (!event.bedrock() || !(GeyserApi.api().connectionByUuid(event.uuid()) instanceof GeyserSession owner)) {
-            return;
-        }
-        BedrockClientData data = owner.getClientData();
-        if (data.getSkinData() == null || data.getSkinData().length > MAX_SKIN) {
-            return;
-        }
-        event.skin(new Skin(data.getSkinId(), data.getSkinData()));
-        event.geometry(new SkinGeometry(new String(data.getGeometryName(), StandardCharsets.UTF_8),
-                new String(data.getGeometryData(), StandardCharsets.UTF_8)));
+    private static String text(Map<?, ?> map, String key) {
+        Object value = map.get(key);
+        return value == null ? "" : String.valueOf(value);
     }
 }

@@ -317,3 +317,15 @@ Objetivo: juego y mapa fluidos en la Pi. Generar terreno mientras se juega causa
 - **Cambio:** al iniciar sesión (`SessionLoginEvent`, antes de construir la lista de jugadores), el addon guarda esas skins (hasta 512×512) y su geometría con `SkinProvider.storeBedrockSkin`/`storeBedrockGeometry` de Geyser, por reflexión. Si no existen, avisa y no falla.
 - **Modo `converted`:** usa `SessionSkinApplyEvent` para que Bedrock vea la original.
 - **Compilación:** el addon se compila también contra `Geyser-Spigot.jar`. Un cambio incompatible en Geyser hace fallar `update` antes de parar el servidor.
+
+### MclanSkins 1.2.0: skins persona completas (19-10-2026)
+
+- **Verificado en hardware con la 1.1.0:** el cliente seguía mostrando Sunny. El respaldo de Geyser para ese UUID sería Efe, así que Geyser sí enviaba la skin y era el cliente quien la rechazaba.
+- **Diagnóstico de la 1.1.1:** «256x256, persona=true, arm=slim, patch=…animated_face_persona…, geometry=75117 B, animatedImages=1, personaPieces=11, pieceTints=3, geometryEngine=1.14.0».
+  - Es una skin del creador de personajes.
+  - Geyser no conserva ni las piezas, ni los tintes, ni la animación de la cara, y además la marca como no persona.
+- **Cambio:**
+  - Al iniciar sesión, el addon construye la `SerializedSkin` completa a partir del JWT firmado del cliente, con `jose4j`, incluido en Geyser.
+  - Sustituye la `UpstreamSession` de cada sesión por `SkinUpstream`. Esta cambia la skin de cada entrada de `PlayerListPacket` cuyo XUID corresponde a un jugador Bedrock.
+  - La caché de Geyser (1.1.0) y `SessionSkinApplyEvent` ya no se usan.
+- **Pendiente de hardware:** comprobación visual. Los cambios de skin en mitad de la partida siguen exigiendo reconectar.

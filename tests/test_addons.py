@@ -35,7 +35,7 @@ class AddonTests(unittest.TestCase):
 
     def test_identity_follows_the_source_code(self):
         entry = addons.describe(self.root)['mclan_skins']
-        self.assertEqual(entry['version'], '1.1.1')
+        self.assertEqual(entry['version'], '1.2.0')
         self.assertEqual(entry, addons.describe(ROOT)['mclan_skins'])
         java = self.root / 'addons/mclan-skins/src/dev/mclan/skins/MclanSkins.java'
         java.write_text(java.read_text() + '\n')
